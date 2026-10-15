@@ -267,6 +267,14 @@ async fn receive_loop(
     let mut expected_since: u64 = 0;
     let mut lost_since: u64 = 0;
 
+    // Warn once if no video arrives shortly after the stream starts. The most
+    // common cause is a host firewall (or Windows Firewall) dropping inbound UDP.
+    let stream_start = Instant::now();
+    let mut video_watchdog = tokio::time::interval(Duration::from_secs(5));
+    video_watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut total_frames: u64 = 0;
+    let mut warned_no_video = false;
+
     let mut frames: u64 = 0;
     let mut bytes: u64 = 0;
     let mut decoded: u64 = 0;
@@ -329,6 +337,7 @@ async fn receive_loop(
                     last_frame_id = Some(frame.frame_id);
 
                     frames += 1;
+                    total_frames += 1;
                     bytes += frame.data.len() as u64;
                     // A corrupt or undecodable frame must not end the session;
                     // log it, ask for a fresh keyframe and carry on.
@@ -392,6 +401,29 @@ async fn receive_loop(
                 expected_since = 0;
                 lost_since = 0;
             }
+
+            _ = video_watchdog.tick() => {
+                if total_frames == 0
+                    && !warned_no_video
+                    && stream_start.elapsed() >= Duration::from_secs(5)
+                {
+                    warned_no_video = true;
+                    warn_no_video();
+                }
+            }
         }
     }
+}
+
+/// Explain the most common cause of "connected but no video": inbound UDP is
+/// being dropped. Print the one-line fix for the current executable.
+fn warn_no_video() {
+    let exe = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "macss-client.exe".to_string());
+    tracing::warn!("no video received ~5s after start — inbound UDP looks blocked");
+    tracing::warn!(
+        "allow this program from an elevated PowerShell: New-NetFirewallRule -DisplayName \"macss-client\" -Direction Inbound -Action Allow -Protocol UDP -Program \"{exe}\" -Profile Any"
+    );
+    tracing::warn!("or run: powershell -ExecutionPolicy Bypass -File scripts\\windows-allow-firewall.ps1 -SelfElevate");
 }

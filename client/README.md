@@ -74,6 +74,22 @@ is clean, up to the `--bitrate` cap. This needs the host to advertise
 `adaptive_bitrate` in `hello_ack`; against a host that doesn't, the rate stays
 fixed. Use `--no-adaptive-bitrate` to pin it regardless.
 
+### Windows Firewall
+
+The host sends video to the client over **UDP**. Windows Firewall blocks inbound
+UDP by default, and unlike a TCP listener the Defender prompt usually does **not**
+appear for a UDP socket — so the client connects, mouse/keyboard work (outbound
+TCP), but the window stays black. Allow the client once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows-allow-firewall.ps1 -SelfElevate
+```
+
+That adds an inbound UDP allow rule for `macss-client.exe` on all profiles (so it
+works even when the network is marked Public). Add `-ExePath` to target a
+specific build. If no video arrives within ~5 s the client now logs this hint
+with the exact command for its own path.
+
 ## Decoding backends
 
 | Platform | Backend | How |
