@@ -38,12 +38,18 @@ Grant these in System Settings → Privacy & Security (the menu bar has shortcut
 
 Wake-on-LAN additionally needs **Wake for network access** enabled.
 
-> If you run via `swift run` instead of the bundle, macOS attributes the
-> permissions to **Terminal**, not to this binary. Prefer the `.app`.
+The host only *checks* permissions at launch and never pops a prompt on its own:
+use the menu-bar items to grant them, or let ScreenCaptureKit ask on the first
+capture.
+
+> Launch the bundle with `open dist/MacScreenShare.app` rather than running the
+> binary (or `swift run`) from a shell. macOS ties a permission prompt to the
+> **responsible** process — a shell-launched binary makes it say *Terminal*
+> instead of *MacScreenShare* — and the grant is remembered against that
+> identity. Prefer the `.app`.
 
 ## Status
 
-Authored against the real frameworks but **not yet compiled** — it was written
-on a machine without a Swift toolchain. Expect a handful of small signature
-fixes on the first `swift build`. The most likely candidates are noted in the
-commit history; the `wgpu`/`winit` Rust client side is already verified.
+Compiles and runs on macOS 15: `swift build` and `./scripts/build-host-app.sh`
+both succeed, and the app captures, encodes and streams to the Rust client
+(which decodes with VideoToolbox). The first-build signature fixes are done.

@@ -70,8 +70,9 @@ swift build -c release --package-path host-macos
 ./scripts/build-host-app.sh
 ```
 
-Run it and grant the permissions it asks for (see below), then point the client
-at the address shown in the menu bar:
+Run it and grant the permissions from the menu bar (see below) — or let
+ScreenCaptureKit ask on the first capture — then point the client at the address
+shown in the menu bar:
 
 ```sh
 cargo run -p macss-client -- 192.168.1.23 --token <secret>

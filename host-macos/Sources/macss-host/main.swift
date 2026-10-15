@@ -177,13 +177,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkPermissions() {
+        // Check only — do not pop a system prompt at launch. Requesting here
+        // fires before the app has any reason to capture or inject, and when
+        // the host is launched from a shell (rather than via
+        // `open dist/MacScreenShare.app`) macOS attributes that prompt to the
+        // shell, e.g. "Terminal". Grant from the menu bar, and let
+        // ScreenCaptureKit prompt on the first capture.
         if !Permissions.hasScreenRecording {
-            Log.warn("Screen Recording permission is missing; the menu can open the settings pane")
-            _ = Permissions.requestScreenRecording()
+            Log.warn("Screen Recording permission is missing; grant it from the menu bar")
         }
         if !Permissions.hasAccessibility {
-            Log.warn("Accessibility permission is missing; keyboard/mouse control will not work")
-            Permissions.requestAccessibility()
+            Log.warn("Accessibility permission is missing; grant it from the menu bar to enable keyboard/mouse control")
         }
     }
 
