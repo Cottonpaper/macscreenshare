@@ -32,22 +32,70 @@ final class HostServer {
             throw HostError.invalidArgument("bad control port \(settings.controlPort)")
         }
         let listener = try NWListener(using: parameters, on: port)
+
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
+            // Printed the instant a TCP connection reaches the process. If a
+            // client connects but this never appears, the packets are being
+            // dropped before they get here (firewall, network filter, or the
+            // Local Network permission).
+            Log.info("inbound connection accepted from \(connection.endpoint)")
             self.queue.async { self.accept(connection) }
         }
+
         listener.stateUpdateHandler = { [weak self] state in
+            let configured = self?.settings.controlPort ?? 0
             switch state {
+            case .setup:
+                Log.info("control listener: setup")
+            case .waiting(let error):
+                // The system is holding the listener back. The port can still
+                // show up in `lsof` while inbound SYNs are silently dropped.
+                Log.warn("control listener: WAITING on tcp/\(configured) — \(error)")
+                Log.warn("  inbound connections will not be accepted in this state")
             case .ready:
-                Log.info("control server listening on tcp/\(self?.settings.controlPort ?? 0)")
+                let bound = listener.port.map { "\($0)" } ?? "?"
+                Log.info("control listener: ready on tcp/\(configured) (bound \(bound))")
+                let addresses = HostServer.localIPv4Addresses()
+                Log.info("  local IPv4: \(addresses.isEmpty ? "none" : addresses.joined(separator: ", "))")
             case .failed(let error):
-                Log.warn("listener failed: \(error)")
-            default:
-                break
+                Log.warn("control listener: failed — \(error)")
+            case .cancelled:
+                Log.info("control listener: cancelled")
+            @unknown default:
+                Log.info("control listener: unknown state")
             }
         }
         listener.start(queue: queue)
         self.listener = listener
+    }
+
+    /// Every non-loopback IPv4 address, for logging and diagnostics.
+    static func localIPv4Addresses() -> [String] {
+        var results: [String] = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return results }
+        defer { freeifaddrs(ifaddr) }
+
+        var pointer = first
+        while true {
+            let interface = pointer.pointee
+            if let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
+                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(addr, socklen_t(addr.pointee.sa_len),
+                               &host, socklen_t(host.count),
+                               nil, 0, NI_NUMERICHOST) == 0 {
+                    let name = String(cString: interface.ifa_name)
+                    let address = String(cString: host)
+                    if !address.hasPrefix("127.") {
+                        results.append("\(address) (\(name))")
+                    }
+                }
+            }
+            guard let next = interface.ifa_next else { break }
+            pointer = next
+        }
+        return results
     }
 
     func stop() {
