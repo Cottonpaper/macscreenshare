@@ -1,3 +1,8 @@
+# ![WARNING! AI SLOP](https://img.shields.io/badge/-WARNING!_AI_SLOP-red?style=for-the-badge)
+
+> [!WARNING]
+> This repository was largely AI-generated with minimal human review. Verify before relying on it.
+
 # macscreenshare
 
 Mirror a macOS screen to a Windows or macOS client over Wi-Fi, with mouse and
@@ -14,11 +19,12 @@ See [`docs/protocol.md`](docs/protocol.md) for the normative wire format.
 ## Status
 
 Early but runnable. The Rust client connects, receives video, renders it in a
-window, and forwards mouse/keyboard back to the host. On macOS the client decodes
-natively with VideoToolbox — hardware accelerated, no Homebrew or FFmpeg needed.
-On Windows, enable the `ffmpeg` feature for real decoding, or use
-`--synthetic-video` to exercise the renderer. The macOS host builds against the
-real Apple frameworks and now compiles and runs on a Mac.
+window, and forwards mouse/keyboard back to the host. Both platforms decode
+natively out of the box: VideoToolbox on macOS, Media Foundation on Windows —
+hardware accelerated, with no FFmpeg or extra packages needed. FFmpeg remains an
+optional alternative backend, and `--synthetic-video` renders a local test
+pattern so you can exercise the renderer without a host. The macOS host builds
+against the real Apple frameworks and now compiles and runs on a Mac.
 
 | Area | State |
 |---|---|
@@ -27,40 +33,24 @@ real Apple frameworks and now compiles and runs on a Mac.
 | Client session (handshake, stream, stats, reconnect, input) | done, end-to-end tested against a mock host |
 | Client window + wgpu YUV renderer + input capture | done, launches and renders (Vulkan on Windows, Metal on macOS) |
 | VideoToolbox decode backend (macOS) | done, hardware decode, default on macOS |
-| FFmpeg decode backend | written, behind the `ffmpeg` feature (the non-macOS path) |
+| Media Foundation decode backend (Windows) | done, native H.264 decode by default (HEVC needs the OS "HEVC Video Extensions") |
+| FFmpeg decode backend | optional alternative, behind the `ffmpeg` feature |
 | macOS host: capture, encode, input injection, clipboard, menu bar | builds and runs on macOS |
 | macOS host: app bundle + Info.plist + build script | provided |
-
-## Repository layout
-
-```
-docs/protocol.md            wire protocol spec (source of truth)
-host-macos/                 Swift package for the macOS host
-  Sources/macss-host/       CaptureEngine, VideoEncoder, InputInjector,
-                            ClipboardBridge, HostServer, Protocol, main
-  Info.plist                bundle metadata
-client/                     Rust workspace
-  crates/protocol/          wire types (no dependencies)
-  crates/transport/         control framing, UDP video, backoff, WOL
-  crates/decoder/           decoder trait + null/FFmpeg backends, synthetic frames
-  crates/viewer/            winit + wgpu window, YUV renderer, input translation
-  crates/client/            client binary + library
-  crates/mock-host/         fake host for development
-scripts/build-host-app.sh   build + bundle + ad-hoc sign the host
-```
 
 ## Building the client
 
 ```sh
 cd client
-cargo test --workspace          # 39 tests
+cargo test --workspace
 cargo run -p macss-mock-host -- --seconds 60     # terminal 1
 cargo run -p macss-client -- 127.0.0.1 --synthetic-video   # terminal 2
 ```
 
 `--synthetic-video` renders a local test pattern so you can see the window and
-input path without installing FFmpeg. Real decoding requires FFmpeg; see
-[`client/README.md`](client/README.md).
+input path without a host. Real decoding works natively on both platforms —
+VideoToolbox on macOS, Media Foundation on Windows; FFmpeg is an optional
+alternative. See [`client/README.md`](client/README.md) for details.
 
 ## Building the host (on macOS)
 
