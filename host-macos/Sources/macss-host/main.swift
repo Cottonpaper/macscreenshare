@@ -21,6 +21,7 @@ struct Arguments {
         --fps <N>        Default frame rate               [default: 60]
         --bitrate <K>    Default max bitrate in kbit/s    [default: 20000]
         --no-cursor      Do not capture the mouse cursor
+        --idle-refresh <N>  Refresh a static screen at N fps (0 = only on change) [default: 10]
         --verbose        Verbose logging
         -h, --help       Show this help
     """
@@ -50,6 +51,11 @@ struct Arguments {
                 i += 1
             case "--no-cursor":
                 result.settings.captureCursor = false
+            case "--idle-refresh":
+                if i + 1 < args.count, let value = Int(args[i + 1]) {
+                    result.settings.idleRefreshFPS = min(max(value, 0), 60)
+                }
+                i += 1
             case "--verbose":
                 result.verbose = true
             case "-h", "--help":

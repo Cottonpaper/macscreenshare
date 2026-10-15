@@ -11,6 +11,8 @@ struct Settings {
     var fps: Int = 60
     var bitrateKbps: Int = 20_000
     var captureCursor: Bool = true
+    /// Forward ScreenCaptureKit "idle" frames at up to this rate (0 = drop them).
+    var idleRefreshFPS: Int = 10
     var hostName: String = Host.current().localizedName ?? "Mac"
 }
 
@@ -337,7 +339,9 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
             guard let self else { return }
             do {
                 let engine = try await CaptureEngine.mainDisplay(
-                    fps: self.fps, captureCursor: self.settings.captureCursor)
+                    fps: self.fps,
+                    captureCursor: self.settings.captureCursor,
+                    idleRefreshFPS: self.settings.idleRefreshFPS)
                 self.queue.async { self.activate(engine: engine, udpPort: udpPort) }
             } catch {
                 self.queue.async {

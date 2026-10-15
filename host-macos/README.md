@@ -26,7 +26,14 @@ open dist/MacScreenShare.app
 ```
 
 Options: `--token <T>`, `--port <P>`, `--fps <N>`, `--bitrate <K>`,
-`--no-cursor`, `--verbose`.
+`--no-cursor`, `--idle-refresh <N>`, `--verbose`.
+
+`--idle-refresh` sets how often a *static* screen is still refreshed (default
+10 fps). ScreenCaptureKit marks frames `idle` when nothing changed; the host
+forwards those at this rate so the client keeps converging on the current screen
+(cursor, caret, and updates ScreenCaptureKit doesn't flag) instead of freezing on
+the last frame. `--idle-refresh 0` restores the old "only send on change"
+behaviour.
 
 ## Permissions
 

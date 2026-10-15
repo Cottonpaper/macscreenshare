@@ -28,14 +28,24 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream!
     private let sampleQueue: DispatchQueue
     private let frameStatusKey = SCStreamFrameInfo.status
+    /// Minimum seconds between forwarded "idle" frames, or `nil` to drop them.
+    private let idleInterval: CFTimeInterval?
+    private var lastForwarded: CFTimeInterval = 0
 
-    private init(info: DisplayInfo, queue: DispatchQueue) {
+    private init(info: DisplayInfo, queue: DispatchQueue, idleInterval: CFTimeInterval?) {
         self.info = info
         self.sampleQueue = queue
+        self.idleInterval = idleInterval
     }
 
     /// Build a capture engine for the main display (falling back to any display).
-    static func mainDisplay(fps: Int, captureCursor: Bool = true) async throws -> CaptureEngine {
+    ///
+    /// `idleRefreshFPS` controls how often ScreenCaptureKit's "idle" frames
+    /// (nothing has changed) are still forwarded, so a static screen keeps the
+    /// client in sync instead of freezing on the last frame. `0` drops them.
+    static func mainDisplay(
+        fps: Int, captureCursor: Bool = true, idleRefreshFPS: Int = 10
+    ) async throws -> CaptureEngine {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true)
 
@@ -70,7 +80,9 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let queue = DispatchQueue(label: "macss.capture", qos: .userInitiated)
-        let engine = CaptureEngine(info: info, queue: queue)
+        let idleInterval: CFTimeInterval? =
+            idleRefreshFPS > 0 ? 1.0 / Double(idleRefreshFPS) : nil
+        let engine = CaptureEngine(info: info, queue: queue, idleInterval: idleInterval)
         let stream = SCStream(filter: filter, configuration: config, delegate: engine)
         engine.stream = stream
         try stream.addStreamOutput(engine, type: .screen, sampleHandlerQueue: queue)
@@ -99,9 +111,22 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         guard type == .screen, sampleBuffer.isValid else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // Drop non-complete frames (idle/blank) reported by ScreenCaptureKit.
-        if let status = frameStatus(from: sampleBuffer), status != .complete {
-            return
+        // ScreenCaptureKit marks frames as `idle` when nothing changed. Dropping
+        // them all makes the client freeze on the last frame, so forward idle
+        // frames at a low rate to keep the picture converged (cursor, caret,
+        // unrecognised updates). `blank`/`suspended` are still dropped.
+        if let status = frameStatus(from: sampleBuffer) {
+            let now = CFAbsoluteTimeGetCurrent()
+            switch status {
+            case .complete:
+                lastForwarded = now
+            case .idle:
+                guard let idleInterval else { return }
+                if now - lastForwarded < idleInterval { return }
+                lastForwarded = now
+            default:
+                return
+            }
         }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
