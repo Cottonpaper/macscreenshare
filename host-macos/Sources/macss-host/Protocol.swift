@@ -130,6 +130,17 @@ struct ClipboardIn: Decodable {
     var text: String
 }
 
+/// `set_bitrate`: change the target bitrate mid-stream.
+struct SetBitrateRequest: Decodable {
+    var type: String
+    var maxBitrateKbps: UInt32
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case maxBitrateKbps = "max_bitrate_kbps"
+    }
+}
+
 /// A message received from the client.
 enum ClientMessage {
     case hello(Hello)
@@ -140,6 +151,7 @@ enum ClientMessage {
     case input(InputEvent)
     case clipboard(text: String)
     case requestKeyframe
+    case setBitrate(SetBitrateRequest)
     case bye
 }
 
@@ -167,6 +179,8 @@ extension ClientMessage {
             return .clipboard(text: try decoder.decode(ClipboardIn.self, from: data).text)
         case "request_keyframe":
             return .requestKeyframe
+        case "set_bitrate":
+            return .setBitrate(try decoder.decode(SetBitrateRequest.self, from: data))
         case "bye":
             return .bye
         default:
@@ -189,6 +203,8 @@ struct HelloAck: Encodable {
     var scale: Float
     var videoPort: UInt16
     var codecs: [Codec]
+    /// Additive capability list; clients ignore unknown entries.
+    var capabilities: [String]
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -200,6 +216,7 @@ struct HelloAck: Encodable {
         case scale
         case videoPort = "video_port"
         case codecs
+        case capabilities
     }
 }
 

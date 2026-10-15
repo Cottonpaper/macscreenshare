@@ -87,6 +87,7 @@ fn run_windowed(arguments: Args) -> Result<()> {
         Box::new(move |event| {
             let _ = input_tx.send(event);
         }),
+        !arguments.no_grab,
     );
 
     event_loop.run_app(&mut app)?;

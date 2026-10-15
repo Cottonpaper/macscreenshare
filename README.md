@@ -109,11 +109,13 @@ macOS host (Swift)                          client (Rust)
 ## Roadmap
 
 1. **M0/M1:** protocol, transport, host capture/encode, client receive + stats. ✅
-2. **M2:** client window + GPU render (winit + wgpu) and input capture → host injection. ✅
-3. **M3:** native VideoToolbox decode on macOS — done
+2. **M2:** client window + GPU render (winit + wgpu), input capture → host injection,
+   and pointer capture (click to lock, Esc to release). ✅
+3. **M3:** native VideoToolbox decode on macOS
    ([`docs/videotoolbox-decode.md`](docs/videotoolbox-decode.md)), so no FFmpeg
-   is needed on a Mac. Next: robustness — keyframe recovery, adaptive bitrate,
-   sleep prevention, permission UX.
+   is needed on a Mac — plus robustness: keyframe recovery, adaptive bitrate,
+   sleep prevention and the permission UX (stable code-signing identity,
+   non-repeating prompts). ✅
 4. **M4:** clipboard polish (the wire path exists), multi-display selection.
 5. **M5:** packaging (Windows installer, notarized macOS `.app`), end-to-end docs.
 

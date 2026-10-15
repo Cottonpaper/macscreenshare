@@ -64,6 +64,19 @@ capture.
 > instead of *MacScreenShare* — and the grant is remembered against that
 > identity. Prefer the `.app`.
 
+## While streaming
+
+The host holds a `ProcessInfo` activity assertion for the life of a stream, so
+the Mac and its display stay awake while a client is connected. The assertion is
+released as soon as the stream stops (client disconnect, `stop_stream`, `bye`,
+or control timeout) — including across reconnects, so it never leaks. This is
+what stops an idle Mac from sleeping mid-session and dropping the client.
+
+The host advertises the `adaptive_bitrate` capability in `hello_ack`. A client
+that supports it can change the encoder's target bitrate mid-stream with
+`set_bitrate` (clamped to 500–200000 kbit/s); the change takes effect over the
+next few frames and does not force a keyframe.
+
 ## Status
 
 Compiles and runs on macOS 15: `swift build` and `./scripts/build-host-app.sh`

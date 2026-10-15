@@ -44,6 +44,8 @@ Useful flags:
 |---|---|
 | `--headless` | No window; connect and log only |
 | `--synthetic-video` | Generate local test frames instead of decoding |
+| `--no-grab` | Don't capture the pointer on click (leave the cursor free) |
+| `--no-adaptive-bitrate` | Keep `--bitrate` fixed; don't adapt to loss |
 | `--fps <N>` / `--bitrate <KBPS>` | Requested stream settings |
 | `--codec h264\|hevc` | Preferred codec |
 | `--token <T>` | Shared secret, if the host requires one |
@@ -59,6 +61,18 @@ cargo run -p macss-client -- <mac-host> --token <secret>
 Click the window to focus it; mouse and keyboard then drive the Mac. Video is
 letterboxed to preserve the Mac's aspect ratio, and the pointer coordinates are
 mapped accordingly.
+
+Clicking inside the window also **captures the pointer**: the local cursor is
+hidden and locked so it cannot wander onto the Windows desktop, and motion is
+sent to the Mac as relative movement. Press **Esc** (or focus another window) to
+release it. Pass `--no-grab` to keep the cursor free and always use absolute
+pointing instead.
+
+By default the client also adapts the bitrate to the link: it asks the host to
+lower the target when frames are being dropped and raises it again once the link
+is clean, up to the `--bitrate` cap. This needs the host to advertise
+`adaptive_bitrate` in `hello_ack`; against a host that doesn't, the rate stays
+fixed. Use `--no-adaptive-bitrate` to pin it regardless.
 
 ## Decoding backends
 

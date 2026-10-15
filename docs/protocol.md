@@ -38,7 +38,7 @@ Messages are a serde/Swift `Codable` tagged enum. The tag field is `type`
 | `type` | Direction | Payload |
 |---|---|---|
 | `hello` | client → host | `protocol`, `client_name`, `token?` |
-| `hello_ack` | host → client | `protocol`, `session_id`, `host_name`, `display_width`, `display_height`, `scale`, `video_port`, `codecs` |
+| `hello_ack` | host → client | `protocol`, `session_id`, `host_name`, `display_width`, `display_height`, `scale`, `video_port`, `codecs`, `capabilities?` |
 | `error` | host → client | `code`, `message` |
 | `ping` | both | `nonce` |
 | `pong` | both | `nonce` |
@@ -48,6 +48,7 @@ Messages are a serde/Swift `Codable` tagged enum. The tag field is `type`
 | `input` | client → host | one of the input events below |
 | `clipboard` | both | `text` |
 | `request_keyframe` | client → host | – |
+| `set_bitrate` | client → host | `max_bitrate_kbps` |
 | `stats` | host → client | `fps`, `bitrate_kbps`, `encode_ms`, `dropped` |
 | `bye` | both | – |
 
@@ -58,6 +59,11 @@ with `error { code: "protocol_mismatch" }`.
 it for window sizing hints only; coordinates are **always normalized** (below).
 
 `codecs` is a list of supported codec ids, most-preferred first.
+
+`capabilities` is an optional list of host features. It is additive: hosts that
+predate it omit the field and clients MUST treat its absence as "no optional
+features". Unknown capability strings are ignored. This document defines
+`adaptive_bitrate` (see §2.3).
 
 ### 2.2 Input events
 
@@ -83,6 +89,25 @@ Modifiers bitfield: `shift=1`, `ctrl=2`, `alt=4`, `meta=8`.
 Key codes are **USB HID usage ids** (usage page 0x07), e.g. `0x04` = `a`,
 `0x28` = Return, `0xE0` = Left Ctrl. This makes the mapping portable between
 Windows scancodes/VKs, `winit::KeyCode`, and macOS `CGKeyCode`.
+
+### 2.3 Adaptive bitrate
+
+`set_bitrate` changes the encoder's target bitrate mid-stream. It lets the client
+react to loss without tearing down the stream.
+
+- A client MUST only send `set_bitrate` if the host advertised
+  `adaptive_bitrate` in `hello_ack.capabilities`. Hosts that did not advertise it
+  will not understand the message, so clients that ignore this rule may be
+  disconnected with `error { code: "bad_request" }`.
+- `max_bitrate_kbps` is a target, clamped by the host to a sane range (currently
+  `500..200000`). It does not by itself force a keyframe.
+- The client derives the target from its own loss measurement (frame-id gaps
+  across the UDP stream), starting at the `max_bitrate_kbps` it sent in
+  `start_stream` and using additive-increase / multiplicative-decrease. It
+  should apply hysteresis so it does not send changes for noise.
+- Neither side is required to implement adaptive bitrate. A host that never
+  advertises the capability and a client that never sends the message behave
+  exactly as in fixed-rate v1.
 
 ## 3. Video framing
 

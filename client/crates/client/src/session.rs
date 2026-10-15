@@ -19,6 +19,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::task::JoinHandle;
 
 use crate::args::Args;
+use crate::bitrate::{BitrateConfig, BitrateController};
 
 const HEARTBEAT: Duration = Duration::from_secs(2);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -106,7 +107,7 @@ async fn handshake_and_stream(
     })
     .await?;
 
-    let (display_width, display_height, codecs) = match read_message(rd).await? {
+    let (display_width, display_height, codecs, capabilities) = match read_message(rd).await? {
         Some(ControlMessage::HelloAck {
             protocol,
             session_id,
@@ -116,6 +117,7 @@ async fn handshake_and_stream(
             scale,
             video_port: _,
             codecs,
+            capabilities,
         }) => {
             if protocol != PROTOCOL_VERSION {
                 bail!("host speaks protocol {protocol}, we speak {PROTOCOL_VERSION}");
@@ -123,7 +125,7 @@ async fn handshake_and_stream(
             tracing::info!(
                 "connected to {host_name} (session {session_id}) display {display_width}x{display_height} @{scale}x"
             );
-            (display_width, display_height, codecs)
+            (display_width, display_height, codecs, capabilities)
         }
         Some(ControlMessage::Error { code, message }) => {
             bail!("host rejected connection: {code}: {message}")
@@ -131,6 +133,16 @@ async fn handshake_and_stream(
         Some(other) => bail!("unexpected message during handshake: {other:?}"),
         None => bail!("host closed the connection during handshake"),
     };
+
+    // Adaptive bitrate needs the host to honour `set_bitrate`; otherwise we
+    // stay at the requested fixed rate.
+    let adaptive = !args.no_adaptive_bitrate
+        && capabilities
+            .iter()
+            .any(|c| c == macss_protocol::capabilities::ADAPTIVE_BITRATE);
+    if adaptive {
+        tracing::info!("host supports adaptive bitrate");
+    }
 
     let codec = if codecs.contains(&args.codec) {
         args.codec
@@ -182,8 +194,17 @@ async fn handshake_and_stream(
     };
     let submit_decoded = synthetic.is_none();
 
-    let result =
-        receive_loop(args, rd, tx, hooks, &mut video, decoder.as_mut(), submit_decoded).await;
+    let result = receive_loop(
+        args,
+        rd,
+        tx,
+        hooks,
+        &mut video,
+        decoder.as_mut(),
+        submit_decoded,
+        adaptive,
+    )
+    .await;
 
     if let Some(handle) = synthetic {
         handle.abort();
@@ -232,11 +253,19 @@ async fn receive_loop(
     video: &mut VideoReceiver,
     decoder: &mut dyn VideoDecoder,
     submit_decoded: bool,
+    adaptive: bool,
 ) -> Result<()> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut nonce: u64 = 0;
     let mut last_rx = Instant::now();
+
+    // Adaptive bitrate: one measurement window per second.
+    let mut bitrate = BitrateController::new(BitrateConfig::for_cap(args.bitrate_kbps));
+    let mut bitrate_tick = tokio::time::interval(Duration::from_secs(1));
+    bitrate_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut expected_since: u64 = 0;
+    let mut lost_since: u64 = 0;
 
     let mut frames: u64 = 0;
     let mut bytes: u64 = 0;
@@ -286,7 +315,12 @@ async fn receive_loop(
                 if let Some(frame) = frame? {
                     // Detect loss by frame-id gaps and ask for a fresh keyframe.
                     if let Some(previous) = last_frame_id {
-                        if frame.frame_id != previous.wrapping_add(1) && !frame.keyframe {
+                        // Clamp so a wrap or long stall can't skew the loss ratio.
+                        let gap = (frame.frame_id.wrapping_sub(previous).saturating_sub(1) as u64)
+                            .min(10_000);
+                        lost_since += gap;
+                        expected_since += gap + 1;
+                        if gap > 0 && !frame.keyframe {
                             keyframe_requests += 1;
                             let _ = tx.send(ControlMessage::RequestKeyframe).await;
                         }
@@ -329,6 +363,19 @@ async fn receive_loop(
                 }
                 nonce += 1;
                 tx.send(ControlMessage::Ping { nonce }).await?;
+            }
+
+            // Adaptive bitrate: evaluate one window per second. Disabled (no-op)
+            // unless the host advertised support and the user kept it on.
+            _ = bitrate_tick.tick(), if adaptive => {
+                if let Some(kbps) = bitrate.observe(expected_since, lost_since) {
+                    tracing::info!("adaptive bitrate -> {kbps} kbit/s");
+                    let _ = tx
+                        .send(ControlMessage::SetBitrate { max_bitrate_kbps: kbps })
+                        .await;
+                }
+                expected_since = 0;
+                lost_since = 0;
             }
         }
     }

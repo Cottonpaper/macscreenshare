@@ -22,6 +22,10 @@ pub struct Args {
     pub headless: bool,
     /// Generate local test frames instead of relying on the decoder.
     pub synthetic_video: bool,
+    /// Do not capture (grab) the pointer when the window is clicked.
+    pub no_grab: bool,
+    /// Keep the requested bitrate fixed instead of adapting to loss.
+    pub no_adaptive_bitrate: bool,
 }
 
 impl Default for Args {
@@ -40,6 +44,8 @@ impl Default for Args {
             log_every: 120,
             headless: false,
             synthetic_video: false,
+            no_grab: false,
+            no_adaptive_bitrate: false,
         }
     }
 }
@@ -66,12 +72,14 @@ OPTIONS:
     --name <N>             Client name reported to the host
     --codec <h264|hevc>    Preferred codec            [default: h264]
     --fps <N>              Requested frame rate       [default: 60]
-    --bitrate <KBPS>       Max bitrate in kbit/s      [default: 20000]
+    --bitrate <KBPS>       Max bitrate in kbit/s (adaptive cap) [default: 20000]
     --wol <MAC>            Send a magic packet before connecting (aa:bb:cc:dd:ee:ff)
     --wol-port <P>         Wake-on-LAN port           [default: 9]
     --log-every <N>        Log every N frames, 0 = off [default: 120]
     --headless             No window; just connect and log
     --synthetic-video      Generate local test frames (no decoder needed)
+    --no-grab              Do not capture the pointer on click (free cursor)
+    --no-adaptive-bitrate  Keep --bitrate fixed instead of adapting to loss
     -h, --help             Show this help
 ";
 
@@ -102,6 +110,8 @@ pub fn parse_from<I: IntoIterator<Item = String>>(iter: I) -> Result<Option<Args
             "--log-every" => args.log_every = next_num(&mut it, "--log-every")?,
             "--headless" => args.headless = true,
             "--synthetic-video" => args.synthetic_video = true,
+            "--no-grab" => args.no_grab = true,
+            "--no-adaptive-bitrate" => args.no_adaptive_bitrate = true,
             other if other.starts_with("--") => bail!("unknown option {other:?}"),
             other => positional.push(other.to_string()),
         }
@@ -200,6 +210,20 @@ mod tests {
         assert_eq!(a.fps, 30);
         assert_eq!(a.codec, Codec::Hevc);
         assert_eq!(a.token.as_deref(), Some("x"));
+        assert!(!a.no_grab);
+    }
+
+    #[test]
+    fn no_grab_flag_parses() {
+        let a = parse(&["mac.local", "--no-grab"]).unwrap().unwrap();
+        assert!(a.no_grab);
+    }
+
+    #[test]
+    fn no_adaptive_bitrate_flag_parses() {
+        let a = parse(&["mac.local", "--no-adaptive-bitrate"]).unwrap().unwrap();
+        assert!(a.no_adaptive_bitrate);
+        assert!(!a.no_grab);
     }
 
     #[test]

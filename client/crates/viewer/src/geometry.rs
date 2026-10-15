@@ -46,6 +46,22 @@ pub fn to_normalized(rect: Rect, px: f32, py: f32) -> Option<(f32, f32)> {
     Some((nx, ny))
 }
 
+/// Accumulate a physical-pixel mouse delta into normalized content
+/// coordinates, clamping to `[0,1]`.
+///
+/// Used when the pointer is grabbed/locked: the OS stops reporting an absolute
+/// position, so relative motion is summed into a virtual cursor. Dividing by
+/// the fitted rect maps pixels to content fractions, and clamping keeps the
+/// virtual cursor on the host display.
+pub fn accumulate_norm(rect: Rect, norm: (f32, f32), dx: f32, dy: f32) -> (f32, f32) {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return norm;
+    }
+    let nx = (norm.0 + dx / rect.w).clamp(0.0, 1.0);
+    let ny = (norm.1 + dy / rect.h).clamp(0.0, 1.0);
+    (nx, ny)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +105,26 @@ mod tests {
         let r = fit_rect(0.0, 100.0, 1920.0, 1080.0);
         assert_eq!(r.w, 0.0);
         assert_eq!(to_normalized(Rect::full(0.0, 0.0), 1.0, 1.0), None);
+    }
+
+    #[test]
+    fn accumulate_moves_by_delta_over_rect() {
+        let r = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let (x, y) = accumulate_norm(r, (0.5, 0.5), 25.0, -25.0);
+        assert!((x - 0.75).abs() < 1e-6);
+        assert!((y - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn accumulate_clamps_at_the_edges() {
+        let r = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        assert_eq!(accumulate_norm(r, (0.9, 0.9), 100.0, 100.0), (1.0, 1.0));
+        assert_eq!(accumulate_norm(r, (0.1, 0.1), -100.0, -100.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn accumulate_degenerate_rect_is_identity() {
+        let r = Rect::full(0.0, 0.0);
+        assert_eq!(accumulate_norm(r, (0.3, 0.7), 10.0, 10.0), (0.3, 0.7));
     }
 }

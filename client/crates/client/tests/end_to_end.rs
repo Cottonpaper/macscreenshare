@@ -34,6 +34,7 @@ async fn client_receives_video_then_host_says_bye() {
                 scale: 2.0,
                 video_port: 0,
                 codecs: vec![Codec::H264],
+                capabilities: vec![],
             },
         )
         .await
@@ -103,6 +104,7 @@ async fn client_forwards_input_events_to_the_host() {
                 scale: 1.0,
                 video_port: 0,
                 codecs: vec![Codec::H264],
+                capabilities: vec![],
             },
         )
         .await

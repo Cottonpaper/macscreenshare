@@ -81,6 +81,13 @@ final class VideoEncoder {
         forceKeyframeNext = true
     }
 
+    /// Change the target average bitrate mid-stream (adaptive bitrate). Takes
+    /// effect over the next few frames; no keyframe is forced.
+    func setBitrate(kbps: Int) {
+        setProperty(kVTCompressionPropertyKey_AverageBitRate,
+                    NSNumber(value: max(500, kbps) * 1000))
+    }
+
     func encode(pixelBuffer: CVPixelBuffer, pts: CMTime) {
         var frameProperties: CFDictionary?
         if forceKeyframeNext {

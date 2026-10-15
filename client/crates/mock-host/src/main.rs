@@ -81,6 +81,7 @@ async fn main() -> Result<()> {
         scale: 2.0,
         video_port: 0,
         codecs: vec![Codec::H264, Codec::Hevc],
+        capabilities: vec![],
     })
     .await?;
 

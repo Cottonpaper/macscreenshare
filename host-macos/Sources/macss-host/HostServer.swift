@@ -155,6 +155,8 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
     private var capture: CaptureEngine?
     private var injector: InputInjector?
     private var clipboard: ClipboardBridge?
+    /// Held while streaming so the Mac does not idle-sleep mid-session.
+    private var activityToken: NSObjectProtocol?
 
     private var codec: Codec = .h264
     private var fps = 60
@@ -202,6 +204,7 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
         heartbeat?.cancel(); heartbeat = nil
         statsTimer?.cancel(); statsTimer = nil
         clipboard?.stop(); clipboard = nil
+        endActivity()
 
         let engine = capture
         engine?.delegate = nil
@@ -266,6 +269,8 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
         case .requestKeyframe:
             lock.lock(); let enc = encoder; lock.unlock()
             enc?.requestKeyframe()
+        case .setBitrate(let request):
+            setBitrate(request)
         case .bye:
             send(.bye)
             close()
@@ -299,7 +304,8 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
             displayHeight: UInt32(max(0, height)),
             scale: scale,
             videoPort: DefaultPort.video,
-            codecs: [.h264, .hevc]
+            codecs: [.h264, .hevc],
+            capabilities: ["adaptive_bitrate"]
         )))
     }
 
@@ -378,6 +384,8 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
             statsWindowStart = Date()
             lock.unlock()
 
+            beginActivity()
+
             Log.info("streaming to \(peerHost):\(udpPort) — \(codec.rawValue) \(engine.info.widthPixels)x\(engine.info.heightPixels) @ \(fps) fps")
             send(.streamStarted(StreamStarted(
                 codec: codec,
@@ -408,12 +416,44 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
         clipboard?.stop()
         clipboard = nil
         injector = nil
+        endActivity()
         Log.info("stream stopped")
     }
 
     private func videoSenderIsNil() -> Bool {
         lock.lock(); defer { lock.unlock() }
         return videoSender == nil
+    }
+
+    /// Apply a client-requested bitrate change (adaptive bitrate).
+    private func setBitrate(_ request: SetBitrateRequest) {
+        let kbps = min(max(Int(request.maxBitrateKbps), 500), 200_000)
+        lock.lock(); let enc = encoder; lock.unlock()
+        guard let enc else {
+            Log.debug("set_bitrate ignored: not streaming")
+            return
+        }
+        enc.setBitrate(kbps: kbps)
+        Log.info("client changed bitrate to \(kbps) kbit/s")
+    }
+
+    // MARK: Sleep prevention
+
+    /// Keep the Mac (and its display) awake for as long as a stream is active.
+    /// Without this, an idle Mac can sleep mid-session and drop the client.
+    private func beginActivity() {
+        guard activityToken == nil else { return }
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleDisplaySleepDisabled, .idleSystemSleepDisabled],
+            reason: "Streaming the screen to a connected client")
+        Log.debug("holding sleep-prevention assertion while streaming")
+    }
+
+    private func endActivity() {
+        guard let token = activityToken else { return }
+        ProcessInfo.processInfo.endActivity(token)
+        activityToken = nil
+        Log.debug("released sleep-prevention assertion")
     }
 
     // MARK: Timers

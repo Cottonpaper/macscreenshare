@@ -37,6 +37,12 @@ pub mod modifiers {
     pub const META: u8 = 1 << 3;
 }
 
+/// Optional host capabilities advertised in `hello_ack`.
+pub mod capabilities {
+    /// Host honours `set_bitrate` mid-stream.
+    pub const ADAPTIVE_BITRATE: &str = "adaptive_bitrate";
+}
+
 /// Codec identifiers used on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,6 +123,9 @@ pub enum ControlMessage {
         scale: f32,
         video_port: u16,
         codecs: Vec<Codec>,
+        /// Additive capability list; absent on hosts that predate it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     Error {
         code: String,
@@ -148,6 +157,11 @@ pub enum ControlMessage {
         text: String,
     },
     RequestKeyframe,
+    /// Change the encoder target bitrate mid-stream. Only sent when the host
+    /// advertised [`capabilities::ADAPTIVE_BITRATE`].
+    SetBitrate {
+        max_bitrate_kbps: u32,
+    },
     Stats {
         fps: f32,
         bitrate_kbps: u32,
@@ -487,6 +501,10 @@ mod tests {
                 scale: 2.0,
                 video_port: DEFAULT_VIDEO_PORT,
                 codecs: vec![Codec::H264, Codec::Hevc],
+                capabilities: vec![capabilities::ADAPTIVE_BITRATE.to_string()],
+            },
+            ControlMessage::SetBitrate {
+                max_bitrate_kbps: 8_000,
             },
             ControlMessage::Input {
                 event: InputEvent::MouseMove { x: 0.5, y: 0.25 },
@@ -522,5 +540,22 @@ mod tests {
         .unwrap();
         assert_eq!(json["type"], "input");
         assert_eq!(json["event"]["kind"], "mouse_scroll");
+    }
+
+    #[test]
+    fn hello_ack_without_capabilities_defaults_empty() {
+        let json = r#"{"type":"hello_ack","protocol":1,"session_id":"s","host_name":"h","display_width":100,"display_height":50,"scale":2.0,"video_port":47811,"codecs":["h264"]}"#;
+        match serde_json::from_str::<ControlMessage>(json).unwrap() {
+            ControlMessage::HelloAck { capabilities, .. } => assert!(capabilities.is_empty()),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_bitrate_tag_is_stable() {
+        let json =
+            serde_json::to_value(ControlMessage::SetBitrate { max_bitrate_kbps: 4000 }).unwrap();
+        assert_eq!(json["type"], "set_bitrate");
+        assert_eq!(json["max_bitrate_kbps"], 4000);
     }
 }
