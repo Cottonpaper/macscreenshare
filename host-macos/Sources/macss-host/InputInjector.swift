@@ -15,7 +15,27 @@ final class InputInjector {
         self.bounds = CGDisplayBounds(displayID)
     }
 
+    private var lastTrustCheck = Date.distantPast
+    private var trusted = false
+    private var warnedUntrusted = false
+
     func handle(_ event: InputEvent) {
+        // Without Accessibility, CGEvent.post drops events silently. Re-check
+        // periodically so a grant made mid-session takes effect.
+        let now = Date()
+        if now.timeIntervalSince(lastTrustCheck) > 2 {
+            lastTrustCheck = now
+            trusted = Permissions.hasAccessibility
+            if trusted { warnedUntrusted = false }
+        }
+        guard trusted else {
+            if !warnedUntrusted {
+                warnedUntrusted = true
+                Log.warn("\(HostError.missingPermission("Accessibility")); dropping remote input")
+            }
+            return
+        }
+
         switch event {
         case .mouseMove(let x, let y):
             move(x: x, y: y, button: .left, type: .mouseMoved)

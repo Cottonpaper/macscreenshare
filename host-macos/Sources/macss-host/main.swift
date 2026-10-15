@@ -65,7 +65,7 @@ struct Arguments {
 
 // MARK: - App delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var server: HostServer?
     private var settings = Settings()
@@ -97,7 +97,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuildMenu() {
-        let menu = NSMenu()
+        let menu = statusItem?.menu ?? NSMenu()
+        populate(menu)
+        menu.delegate = self
+        statusItem?.menu = menu
+    }
+
+    private func populate(_ menu: NSMenu) {
+        menu.removeAllItems()
         let address = localIPv4Address() ?? "your-mac.local"
         let state = server != nil ? "listening on \(address):\(settings.controlPort)" : "stopped"
         _ = menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
@@ -110,10 +117,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        _ = menu.addItem(withTitle: "Grant Screen Recording…",
-                         action: #selector(openScreenRecording), keyEquivalent: "")
-        _ = menu.addItem(withTitle: "Grant Accessibility…",
-                         action: #selector(openAccessibility), keyEquivalent: "")
+        let screenOK = Permissions.hasScreenRecording
+        let axOK = Permissions.hasAccessibility
+        _ = menu.addItem(withTitle: screenOK ? "✅ Screen Recording granted" : "⚠️ Grant Screen Recording…",
+                         action: screenOK ? nil : #selector(openScreenRecording), keyEquivalent: "")
+        _ = menu.addItem(withTitle: axOK ? "✅ Accessibility granted" : "⚠️ Grant Accessibility…",
+                         action: axOK ? nil : #selector(openAccessibility), keyEquivalent: "")
+        if !screenOK {
+            // Screen Recording grants only apply to a fresh process.
+            _ = menu.addItem(withTitle: "Relaunch to apply permissions",
+                             action: #selector(relaunch), keyEquivalent: "")
+        }
+        if !Permissions.isBundled {
+            _ = menu.addItem(withTitle: "⚠️ Not running as .app — grants go to the shell",
+                             action: nil, keyEquivalent: "")
+        }
         _ = menu.addItem(withTitle: "Copy host address",
                          action: #selector(copyAddress), keyEquivalent: "")
         menu.addItem(.separator())
@@ -122,7 +140,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for item in menu.items where item.action != nil {
             item.target = self
         }
-        statusItem?.menu = menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        // Re-check permission state each time the menu is shown.
+        populate(menu)
+    }
+
+    @objc private func relaunch() {
+        stopServer()
+        let path = Bundle.main.bundlePath
+        if Permissions.isBundled {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/sh")
+            task.arguments = ["-c", "sleep 1; /usr/bin/open -n \"$0\"", path]
+            try? task.run()
+        }
+        NSApp.terminate(nil)
     }
 
     @objc private func startServerAction() { startServer() }
@@ -130,12 +164,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openScreenRecording() {
         Permissions.requestScreenRecording()
-        Permissions.openSettings(.screenRecording)
     }
 
     @objc private func openAccessibility() {
         Permissions.requestAccessibility()
-        Permissions.openSettings(.accessibility)
     }
 
     @objc private func copyAddress() {
@@ -183,6 +215,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `open dist/MacScreenShare.app`) macOS attributes that prompt to the
         // shell, e.g. "Terminal". Grant from the menu bar, and let
         // ScreenCaptureKit prompt on the first capture.
+        if !Permissions.isBundled {
+            Log.warn("not running from a .app bundle; macOS will attribute permissions to the launching shell. Use scripts/build-host-app.sh and `open dist/MacScreenShare.app`")
+        }
         if !Permissions.hasScreenRecording {
             Log.warn("Screen Recording permission is missing; grant it from the menu bar")
         }

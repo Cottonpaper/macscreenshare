@@ -42,6 +42,22 @@ The host only *checks* permissions at launch and never pops a prompt on its own:
 use the menu-bar items to grant them, or let ScreenCaptureKit ask on the first
 capture.
 
+> **Signing matters.** macOS ties each permission grant to the app's code
+> signature. An ad-hoc signature changes on every build, so a grant can still
+> show as enabled in System Settings but not actually work. Create a stable
+> identity once (no sudo, no Keychain GUI):
+>
+> ```sh
+> ./scripts/make-signing-cert.sh   # one-time; safe to re-run
+> ./scripts/build-host-app.sh      # signs with it automatically
+> ```
+>
+> To clear stale grants:
+> `tccutil reset ScreenCapture dev.macss.host && tccutil reset Accessibility dev.macss.host`.
+>
+> A new Screen Recording grant only takes effect after the host restarts; use
+> the menu's **Relaunch to apply permissions** item.
+
 > Launch the bundle with `open dist/MacScreenShare.app` rather than running the
 > binary (or `swift run`) from a shell. macOS ties a permission prompt to the
 > **responsible** process — a shell-launched binary makes it say *Terminal*

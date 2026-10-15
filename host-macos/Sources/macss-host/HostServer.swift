@@ -316,6 +316,17 @@ final class Session: NSObject, CaptureEngineDelegate, VideoEncoderDelegate {
         bitrateKbps = min(max(Int(request.maxBitrateKbps), 500), 200_000)
         let udpPort = request.udpPort
 
+        guard Permissions.hasScreenRecording else {
+            let error = HostError.missingPermission("Screen Recording")
+            Log.warn("\(error); grant it from the menu bar, then relaunch the host")
+            sendError(code: ErrorCode.badRequest, message: "\(error) on host")
+            close()
+            return
+        }
+        if !Permissions.hasAccessibility {
+            Log.warn("\(HostError.missingPermission("Accessibility")); remote mouse/keyboard input will be ignored")
+        }
+
         Task { [weak self] in
             guard let self else { return }
             do {
