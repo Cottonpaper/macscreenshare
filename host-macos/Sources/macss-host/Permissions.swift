@@ -21,8 +21,10 @@ enum Permissions {
 
     /// Ask for Accessibility (shows the system prompt once).
     static func requestAccessibility() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
+        // Use the literal key rather than the SDK constant: its Swift type
+        // varies (CFString vs Unmanaged<CFString>) across toolchains.
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
     }
 
     static func openSettings(_ pane: Pane) {
