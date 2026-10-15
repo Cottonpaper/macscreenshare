@@ -1,9 +1,9 @@
 # macss-client (Rust)
 
 Cross-platform client (Windows + macOS) for the macscreenshare protocol.
-Current milestone (M2): connect, handshake, receive and reassemble UDP video,
-render it in a window, and forward mouse/keyboard back to the host, with
-reconnect. Real H.264 decoding still needs the `ffmpeg` feature.
+Current milestone (M2/M3): connect, handshake, receive and reassemble UDP video,
+decode it (VideoToolbox on macOS, FFmpeg optional elsewhere), render it in a
+window, and forward mouse/keyboard back to the host, with reconnect.
 
 ## Layout
 
@@ -11,7 +11,7 @@ reconnect. Real H.264 decoding still needs the `ffmpeg` feature.
 |---|---|
 | `macss-protocol` | wire types, video framing, reassembly (no deps) |
 | `macss-transport` | control framing, UDP video, backoff, Wake-on-LAN |
-| `macss-decoder` | `VideoDecoder` trait, null/FFmpeg backends, synthetic frames |
+| `macss-decoder` | `VideoDecoder` trait, VideoToolbox (macOS) / FFmpeg / null backends, Annex-B + plane helpers, synthetic frames |
 | `macss-viewer` | winit + wgpu window, YUV renderer, input translation |
 | `macss-client` | the client binary + library (args, session) |
 | `macss-mock-host` | a fake host for developing without a Mac |
@@ -60,31 +60,48 @@ Click the window to focus it; mouse and keyboard then drive the Mac. Video is
 letterboxed to preserve the Mac's aspect ratio, and the pointer coordinates are
 mapped accordingly.
 
-## Enabling real decoding (FFmpeg)
+## Decoding backends
 
-By default the client builds without FFmpeg: packets are counted but not
-decoded. Use `--synthetic-video` to see the renderer, or build with FFmpeg:
+| Platform | Backend | How |
+|---|---|---|
+| macOS | VideoToolbox | default; hardware H.264/HEVC decode, no extra packages |
+| Windows | FFmpeg | opt in with `--features macss-decoder/ffmpeg` |
+| any | null | counts packets only (the non-macOS default) |
+
+On macOS the `videotoolbox` feature is enabled by default, so a plain
+`cargo run -p macss-client -- <host>` decodes natively. You can select it
+explicitly (it is inert on non-Apple targets):
+
+```sh
+cargo build -p macss-client --features macss-decoder/videotoolbox
+```
+
+For the FFmpeg path (e.g. on Windows):
 
 ```sh
 cargo build -p macss-client --features macss-decoder/ffmpeg
 ```
 
-This needs FFmpeg development libraries at build time:
+which needs FFmpeg development libraries at build time:
 
 - **Windows:** install via [vcpkg](https://vcpkg.io) — `vcpkg install ffmpeg:x64-windows`
   and set `VCPKG_ROOT`. `ffmpeg-next`'s `build` feature picks it up.
-- **macOS:** `brew install ffmpeg pkg-config`.
+- **macOS (if you really want FFmpeg):** `brew install ffmpeg pkg-config`.
 
-The backend lives behind `macss_decoder::VideoDecoder`; a native
-Media Foundation / VideoToolbox implementation can replace it later without
-touching the transport or the renderer.
+Every backend sits behind `macss_decoder::VideoDecoder`, so the transport and
+renderer are untouched. The VideoToolbox backend is specified in
+[`../docs/videotoolbox-decode.md`](../docs/videotoolbox-decode.md).
 
 ## Verified in this environment
 
-- `cargo test --workspace`: 39 tests — protocol framing and reassembly, control
+- `cargo test --workspace`: 55 tests — protocol framing and reassembly, control
   round-trips, UDP send/receive, backoff, arg parsing, HID key mapping, scroll
-  direction, and letterbox coordinate math.
+  direction, letterbox coordinate math, Annex-B/plane helpers, and codec
+  detection.
 - `tests/end_to_end.rs`: a mock host streams frames and the client completes on
   `bye`; a second test injects a `MouseMove` and asserts the host receives it.
-- Windowed client launches a wgpu (Vulkan) surface, receives synthetic frames
-  and renders them without validation errors.
+- Windowed client launches a wgpu surface (Vulkan on Windows, Metal on macOS),
+  receives frames and renders them without validation errors.
+- macOS: `cargo run -p macss-client -- 127.0.0.1` decodes the host's H.264 with
+  VideoToolbox and renders `1440x900 Yuv420p`; `--headless` shows the decoded
+  count climbing with zero keyframe requests or drops.

@@ -14,20 +14,21 @@ See [`docs/protocol.md`](docs/protocol.md) for the normative wire format.
 ## Status
 
 Early but runnable. The Rust client connects, receives video, renders it in a
-window, and forwards mouse/keyboard back to the host. The macOS host is authored
-against the real Apple frameworks but has not been compiled in this repository's
-development environment (Windows), so treat the Swift side as
-authored-but-unverified until built on a Mac. Real H.264 decoding needs the
-`ffmpeg` feature; until then use `--synthetic-video` to exercise rendering.
+window, and forwards mouse/keyboard back to the host. On macOS the client decodes
+natively with VideoToolbox — hardware accelerated, no Homebrew or FFmpeg needed.
+On Windows, enable the `ffmpeg` feature for real decoding, or use
+`--synthetic-video` to exercise the renderer. The macOS host builds against the
+real Apple frameworks and now compiles and runs on a Mac.
 
 | Area | State |
 |---|---|
 | Wire protocol + framing + reassembly | done, unit-tested |
 | Rust transport, backoff, Wake-on-LAN, args | done, unit-tested |
 | Client session (handshake, stream, stats, reconnect, input) | done, end-to-end tested against a mock host |
-| Client window + wgpu YUV renderer + input capture | done, launches and renders (Vulkan) |
-| FFmpeg decode backend | written, behind the `ffmpeg` feature, needs a machine with FFmpeg to verify |
-| macOS host: capture, encode, input injection, clipboard, menu bar | written, not compiled here |
+| Client window + wgpu YUV renderer + input capture | done, launches and renders (Vulkan on Windows, Metal on macOS) |
+| VideoToolbox decode backend (macOS) | done, hardware decode, default on macOS |
+| FFmpeg decode backend | written, behind the `ffmpeg` feature (the non-macOS path) |
+| macOS host: capture, encode, input injection, clipboard, menu bar | builds and runs on macOS |
 | macOS host: app bundle + Info.plist + build script | provided |
 
 ## Repository layout
@@ -108,9 +109,9 @@ macOS host (Swift)                          client (Rust)
 
 1. **M0/M1:** protocol, transport, host capture/encode, client receive + stats. ✅
 2. **M2:** client window + GPU render (winit + wgpu) and input capture → host injection. ✅
-3. **M3 (next):** implement native VideoToolbox decode on macOS
-   ([`docs/videotoolbox-decode.md`](docs/videotoolbox-decode.md)) to drop the
-   FFmpeg dependency, then robustness — keyframe recovery, adaptive bitrate,
+3. **M3:** native VideoToolbox decode on macOS — done
+   ([`docs/videotoolbox-decode.md`](docs/videotoolbox-decode.md)), so no FFmpeg
+   is needed on a Mac. Next: robustness — keyframe recovery, adaptive bitrate,
    sleep prevention, permission UX.
 4. **M4:** clipboard polish (the wire path exists), multi-display selection.
 5. **M5:** packaging (Windows installer, notarized macOS `.app`), end-to-end docs.

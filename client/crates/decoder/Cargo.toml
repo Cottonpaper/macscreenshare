@@ -6,7 +6,18 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-default = []
+# On macOS this selects the native VideoToolbox decoder by default; on every
+# other target the `videotoolbox` module is cfg'd out and the feature is inert.
+# Opt out with --no-default-features.
+default = ["videotoolbox"]
+# Native hardware decode via the system VideoToolbox framework (macOS only).
+videotoolbox = [
+    "dep:block2",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+    "dep:objc2-video-toolbox",
+]
 # Enables the FFmpeg-backed decoder. Requires FFmpeg dev libraries at build
 # time (vcpkg on Windows). See client/README.md.
 ffmpeg = ["dep:ffmpeg-next"]
@@ -16,3 +27,11 @@ macss-protocol.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 ffmpeg-next = { version = "7", optional = true, default-features = false, features = ["build", "codec", "software-resampling", "software-scaling"] }
+
+# VideoToolbox decode dependencies. macOS-only, so Windows never compiles them.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { version = "0.6", optional = true }
+objc2-core-foundation = { version = "0.3", optional = true, default-features = false, features = ["CFArray", "CFDictionary", "CFNumber", "CFString", "CFCGTypes", "objc2"] }
+objc2-core-media = { version = "0.3", optional = true, default-features = false, features = ["alloc", "CMBase", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer", "CMTime", "objc2"] }
+objc2-core-video = { version = "0.3", optional = true, default-features = false, features = ["CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn", "objc2"] }
+objc2-video-toolbox = { version = "0.3", optional = true, default-features = false, features = ["VTBase", "VTErrors", "VTDecompressionSession", "VTDecompressionProperties", "VTSession", "block2", "objc2", "objc2-core-media", "objc2-core-video"] }

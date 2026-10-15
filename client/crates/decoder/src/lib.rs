@@ -10,6 +10,9 @@ pub mod annexb;
 pub mod planes;
 pub mod synthetic;
 
+#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+pub mod videotoolbox;
+
 /// Pixel layout of a decoded frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -93,14 +96,24 @@ impl VideoDecoder for NullDecoder {
 
 /// Build the decoder selected by build features.
 pub fn default_decoder() -> Result<Box<dyn VideoDecoder>> {
-    #[cfg(feature = "ffmpeg")]
+    #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+    {
+        return Ok(Box::new(videotoolbox::VideoToolboxDecoder::new()?));
+    }
+    #[cfg(all(
+        not(all(feature = "videotoolbox", target_os = "macos")),
+        feature = "ffmpeg"
+    ))]
     {
         return Ok(Box::new(ffmpeg_backend::FfmpegDecoder::new_h264()?));
     }
-    #[cfg(not(feature = "ffmpeg"))]
+    #[cfg(all(
+        not(all(feature = "videotoolbox", target_os = "macos")),
+        not(feature = "ffmpeg")
+    ))]
     {
         tracing::warn!(
-            "built without the `ffmpeg` feature: video packets will be counted but not decoded"
+            "built without a real decoder feature: video packets will be counted but not decoded"
         );
         return Ok(Box::new(NullDecoder::new()));
     }
@@ -108,11 +121,21 @@ pub fn default_decoder() -> Result<Box<dyn VideoDecoder>> {
 
 /// Human-readable name of the active decoder backend.
 pub fn backend_name() -> &'static str {
-    #[cfg(feature = "ffmpeg")]
+    #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+    {
+        return "videotoolbox (hardware, NV12)";
+    }
+    #[cfg(all(
+        not(all(feature = "videotoolbox", target_os = "macos")),
+        feature = "ffmpeg"
+    ))]
     {
         return "ffmpeg";
     }
-    #[cfg(not(feature = "ffmpeg"))]
+    #[cfg(all(
+        not(all(feature = "videotoolbox", target_os = "macos")),
+        not(feature = "ffmpeg")
+    ))]
     {
         return "null (packets counted only)";
     }
