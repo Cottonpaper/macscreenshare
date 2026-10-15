@@ -108,8 +108,10 @@ macOS host (Swift)                          client (Rust)
 
 1. **M0/M1:** protocol, transport, host capture/encode, client receive + stats. ✅
 2. **M2:** client window + GPU render (winit + wgpu) and input capture → host injection. ✅
-3. **M3 (next):** verify the Swift host on a Mac, wire up real FFmpeg decode, then
-   robustness — keyframe recovery, adaptive bitrate, sleep prevention, permission UX.
+3. **M3 (next):** implement native VideoToolbox decode on macOS
+   ([`docs/videotoolbox-decode.md`](docs/videotoolbox-decode.md)) to drop the
+   FFmpeg dependency, then robustness — keyframe recovery, adaptive bitrate,
+   sleep prevention, permission UX.
 4. **M4:** clipboard polish (the wire path exists), multi-display selection.
 5. **M5:** packaging (Windows installer, notarized macOS `.app`), end-to-end docs.
 
