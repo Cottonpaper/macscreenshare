@@ -30,12 +30,18 @@ final class VideoEncoder {
             ? kCMVideoCodecType_HEVC
             : kCMVideoCodecType_H264
 
+        // Low-latency rate control is an encoder *specification* (used to select
+        // and configure the encoder), not a compression property.
+        let encoderSpecification: [CFString: Any] = [
+            kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue as Any
+        ]
+
         let status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             width: Int32(width),
             height: Int32(height),
             codecType: codecType,
-            encoderSpecification: nil,
+            encoderSpecification: encoderSpecification as CFDictionary,
             imageBufferAttributes: nil,
             compressedDataAllocator: nil,
             outputCallback: nil,
@@ -58,9 +64,6 @@ final class VideoEncoder {
             setProperty(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
         } else {
             setProperty(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel)
-        }
-        if #available(macOS 13.0, *) {
-            setProperty(kVTCompressionPropertyKey_EnableLowLatencyRateControl, kCFBooleanTrue)
         }
 
         VTCompressionSessionPrepareToEncodeFrames(created)
@@ -175,12 +178,21 @@ final class VideoEncoder {
     }
 
     private static func nalLengthSize(from format: CMFormatDescription) -> Int {
-        if let ext = CMFormatDescriptionGetExtensions(format) as? [String: Any],
-           let n = ext[kCMFormatDescriptionExtension_NALUnitHeaderLength as String] as? Int,
-           n > 0 {
-            return n
+        let subtype = CMFormatDescriptionGetMediaSubType(format)
+        var length: Int32 = 0
+        let status: OSStatus
+        if subtype == kCMVideoCodecType_HEVC {
+            status = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                format, parameterSetIndex: 0, parameterSetPointerOut: nil,
+                parameterSetSizeOut: nil, parameterSetCountOut: nil,
+                nalUnitHeaderLengthOut: &length)
+        } else {
+            status = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                format, parameterSetIndex: 0, parameterSetPointerOut: nil,
+                parameterSetSizeOut: nil, parameterSetCountOut: nil,
+                nalUnitHeaderLengthOut: &length)
         }
-        return 4
+        return (status == noErr && length > 0) ? Int(length) : 4
     }
 
     private static func parameterSets(from format: CMFormatDescription) -> [Data] {

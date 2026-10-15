@@ -23,13 +23,14 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     weak var delegate: CaptureEngineDelegate?
 
     let info: DisplayInfo
-    private let stream: SCStream
+    // `SCStream` takes its delegate at initialization and exposes no setter, so
+    // the engine is created first and the stream is attached afterwards.
+    private var stream: SCStream!
     private let sampleQueue: DispatchQueue
     private let frameStatusKey = SCStreamFrameInfo.status
 
-    private init(info: DisplayInfo, stream: SCStream, queue: DispatchQueue) {
+    private init(info: DisplayInfo, queue: DispatchQueue) {
         self.info = info
-        self.stream = stream
         self.sampleQueue = queue
     }
 
@@ -61,16 +62,17 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = captureCursor
         config.scalesToFit = false
-        config.preservesAspectRatio = true
+        if #available(macOS 14.0, *) {
+            config.preservesAspectRatio = true
+        }
         config.capturesAudio = false
         config.colorSpaceName = CGColorSpace.sRGB
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let queue = DispatchQueue(label: "macss.capture", qos: .userInitiated)
-        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-
-        let engine = CaptureEngine(info: info, stream: stream, queue: queue)
-        stream.delegate = engine
+        let engine = CaptureEngine(info: info, queue: queue)
+        let stream = SCStream(filter: filter, configuration: config, delegate: engine)
+        engine.stream = stream
         try stream.addStreamOutput(engine, type: .screen, sampleHandlerQueue: queue)
         return engine
     }

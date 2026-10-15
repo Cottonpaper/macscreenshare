@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.server = server
             let address = localIPv4Address() ?? "127.0.0.1"
             Log.info("ready — point the client at \(address):\(settings.controlPort)")
-            if let token = settings.token {
+            if settings.token != nil {
                 Log.info("a shared token is required")
             } else {
                 Log.warn("no --token set; any LAN client may connect")
