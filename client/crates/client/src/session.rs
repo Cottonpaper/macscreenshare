@@ -1,13 +1,22 @@
-//! One client session: handshake, stream setup, receive loop, heartbeat.
+//! Client session: handshake, stream setup, receive loop, heartbeat.
+//!
+//! The same code drives the GUI viewer and the headless mode; the difference is
+//! only whether [`SessionHooks`] carries a frame sink and an input receiver.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use macss_decoder::{backend_name, default_decoder, VideoDecoder};
-use macss_protocol::{ControlMessage, PROTOCOL_VERSION};
-use macss_transport::{parse_host_port, read_message, write_message, VideoReceiver};
+use macss_decoder::{
+    backend_name, default_decoder, synthetic::SyntheticSource, FrameSink, VideoDecoder,
+};
+use macss_protocol::{ControlMessage, InputEvent, PROTOCOL_VERSION};
+use macss_transport::{
+    parse_host_port, read_message, send_magic_packet, write_message, Backoff, VideoReceiver,
+};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::task::JoinHandle;
 
 use crate::args::Args;
 
@@ -15,9 +24,47 @@ const HEARTBEAT: Duration = Duration::from_secs(2);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_POLL: Duration = Duration::from_millis(250);
 
+/// Endpoints the session reads from and writes to.
+#[derive(Default)]
+pub struct SessionHooks {
+    /// Where decoded frames are delivered (the renderer).
+    pub frames: Option<Arc<dyn FrameSink>>,
+    /// Input events produced by the client UI.
+    pub input: Option<UnboundedReceiver<InputEvent>>,
+}
+
+/// Connect, reconnect on failure, and never return until interrupted.
+pub async fn run_forever(args: &Args, hooks: &mut SessionHooks) -> Result<()> {
+    if let Some(mac) = args.wol {
+        match send_magic_packet(mac, args.wol_port).await {
+            Ok(()) => tracing::info!("sent Wake-on-LAN magic packet to {mac:02x?}"),
+            Err(error) => tracing::warn!("Wake-on-LAN failed: {error:#}"),
+        }
+        // Give the host a moment to wake before dialling.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    let mut backoff = Backoff::default();
+    loop {
+        match run_once(args, hooks).await {
+            Ok(()) => backoff.reset(),
+            Err(error) => tracing::warn!("session ended: {error:#}"),
+        }
+        let delay = backoff.next_delay();
+        tracing::info!("reconnecting in {delay:?} (Ctrl-C to quit)");
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {}
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("interrupted, exiting");
+                return Ok(());
+            }
+        }
+    }
+}
+
 /// Connect once and run until the connection ends. Returns `Ok(())` when the
 /// host closes cleanly so the caller can reconnect.
-pub async fn run_once(args: &Args) -> Result<()> {
+pub async fn run_once(args: &Args, hooks: &mut SessionHooks) -> Result<()> {
     let addr = parse_host_port(&args.host, args.control_port)?;
     tracing::info!("connecting to {addr}");
     let stream = TcpStream::connect(addr)
@@ -28,15 +75,15 @@ pub async fn run_once(args: &Args) -> Result<()> {
 
     let (tx, mut rx) = mpsc::channel::<ControlMessage>(256);
     let writer = tokio::spawn(async move {
-        while let Some(m) = rx.recv().await {
-            if let Err(e) = write_message(&mut wr, &m).await {
-                tracing::debug!("control write failed: {e:#}");
+        while let Some(message) = rx.recv().await {
+            if let Err(error) = write_message(&mut wr, &message).await {
+                tracing::debug!("control write failed: {error:#}");
                 break;
             }
         }
     });
 
-    let result = handshake_and_stream(args, &mut rd, &tx).await;
+    let result = handshake_and_stream(args, &mut rd, &tx, hooks).await;
 
     // Best-effort goodbye, then let the writer drain.
     let _ = tx.send(ControlMessage::Bye).await;
@@ -50,6 +97,7 @@ async fn handshake_and_stream(
     args: &Args,
     rd: &mut tokio::net::tcp::OwnedReadHalf,
     tx: &mpsc::Sender<ControlMessage>,
+    hooks: &mut SessionHooks,
 ) -> Result<()> {
     tx.send(ControlMessage::Hello {
         protocol: PROTOCOL_VERSION,
@@ -58,7 +106,7 @@ async fn handshake_and_stream(
     })
     .await?;
 
-    let codecs = match read_message(rd).await? {
+    let (display_width, display_height, codecs) = match read_message(rd).await? {
         Some(ControlMessage::HelloAck {
             protocol,
             session_id,
@@ -75,7 +123,7 @@ async fn handshake_and_stream(
             tracing::info!(
                 "connected to {host_name} (session {session_id}) display {display_width}x{display_height} @{scale}x"
             );
-            codecs
+            (display_width, display_height, codecs)
         }
         Some(ControlMessage::Error { code, message }) => {
             bail!("host rejected connection: {code}: {message}")
@@ -106,20 +154,84 @@ async fn handshake_and_stream(
         udp_port,
     })
     .await?;
-    tracing::info!("requested {codec:?} @ {} fps, <= {} kbit/s, udp/{udp_port}", args.fps, args.bitrate_kbps);
+    tracing::info!(
+        "requested {codec:?} @ {} fps, <= {} kbit/s, udp/{udp_port}",
+        args.fps,
+        args.bitrate_kbps
+    );
 
     let mut decoder = default_decoder().context("create decoder")?;
     tracing::info!("decoder: {}", backend_name());
 
-    receive_loop(args, rd, tx, &mut video, decoder.as_mut()).await
+    // Optional synthetic frames let the render path be exercised with no decoder.
+    let synthetic = if args.synthetic_video {
+        match hooks.frames.clone() {
+            Some(sink) => {
+                tracing::info!(
+                    "synthetic video: generating {display_width}x{display_height} test frames"
+                );
+                Some(spawn_synthetic(sink, display_width, display_height, args.fps))
+            }
+            None => {
+                tracing::warn!("--synthetic-video has no effect without a renderer");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let submit_decoded = synthetic.is_none();
+
+    let result =
+        receive_loop(args, rd, tx, hooks, &mut video, decoder.as_mut(), submit_decoded).await;
+
+    if let Some(handle) = synthetic {
+        handle.abort();
+    }
+    result
 }
 
+fn spawn_synthetic(
+    sink: Arc<dyn FrameSink>,
+    width: u32,
+    height: u32,
+    fps: u32,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut source = SyntheticSource::new(width.max(2), height.max(2));
+        let period = Duration::from_millis((1000 / fps.max(1) as u64).max(1));
+        let mut ticker = tokio::time::interval(period);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            sink.submit(source.next_frame());
+        }
+    })
+}
+
+/// Await the next UI input event. Never resolves when there is no UI, or once
+/// the UI channel has closed, so the select branch stays dormant.
+async fn next_input(hooks: &mut SessionHooks) -> InputEvent {
+    match hooks.input.as_mut() {
+        Some(receiver) => loop {
+            match receiver.recv().await {
+                Some(event) => return event,
+                None => std::future::pending::<()>().await,
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn receive_loop(
     args: &Args,
     rd: &mut tokio::net::tcp::OwnedReadHalf,
     tx: &mpsc::Sender<ControlMessage>,
+    hooks: &mut SessionHooks,
     video: &mut VideoReceiver,
     decoder: &mut dyn VideoDecoder,
+    submit_decoded: bool,
 ) -> Result<()> {
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -135,9 +247,9 @@ async fn receive_loop(
 
     loop {
         tokio::select! {
-            msg = read_message(rd) => {
+            message = read_message(rd) => {
                 last_rx = Instant::now();
-                match msg? {
+                match message? {
                     None => {
                         tracing::info!("host closed the connection");
                         return Ok(());
@@ -165,12 +277,16 @@ async fn receive_loop(
                 }
             }
 
+            event = next_input(hooks) => {
+                tx.send(ControlMessage::Input { event }).await?;
+            }
+
             frame = video.recv_frame(READ_POLL) => {
                 last_rx = Instant::now();
                 if let Some(frame) = frame? {
                     // Detect loss by frame-id gaps and ask for a fresh keyframe.
-                    if let Some(prev) = last_frame_id {
-                        if frame.frame_id != prev.wrapping_add(1) && !frame.keyframe {
+                    if let Some(previous) = last_frame_id {
+                        if frame.frame_id != previous.wrapping_add(1) && !frame.keyframe {
                             keyframe_requests += 1;
                             let _ = tx.send(ControlMessage::RequestKeyframe).await;
                         }
@@ -179,9 +295,16 @@ async fn receive_loop(
 
                     frames += 1;
                     bytes += frame.data.len() as u64;
-                    decoded += decoder
-                        .decode(&frame.data, frame.keyframe, frame.timestamp_ms)?
-                        .len() as u64;
+                    let decoded_frames =
+                        decoder.decode(&frame.data, frame.keyframe, frame.timestamp_ms)?;
+                    decoded += decoded_frames.len() as u64;
+                    if submit_decoded {
+                        if let Some(sink) = hooks.frames.as_ref() {
+                            for decoded_frame in decoded_frames {
+                                sink.submit(decoded_frame);
+                            }
+                        }
+                    }
 
                     if args.log_every > 0 && frames % args.log_every == 0 {
                         let secs = window_start.elapsed().as_secs_f64().max(1e-6);

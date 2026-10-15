@@ -4,6 +4,7 @@ members = [
     "crates/protocol",
     "crates/transport",
     "crates/decoder",
+    "crates/viewer",
     "crates/client",
     "crates/mock-host",
 ]
@@ -18,6 +19,7 @@ rust-version = "1.75"
 macss-protocol = { path = "crates/protocol" }
 macss-transport = { path = "crates/transport" }
 macss-decoder = { path = "crates/decoder" }
+macss-viewer = { path = "crates/viewer" }
 
 anyhow = "1"
 thiserror = "1"

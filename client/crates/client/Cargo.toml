@@ -17,8 +17,10 @@ path = "src/main.rs"
 macss-protocol.workspace = true
 macss-transport.workspace = true
 macss-decoder.workspace = true
+macss-viewer.workspace = true
 
 anyhow.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+winit = "0.30"

@@ -4,9 +4,8 @@
 use std::time::Duration;
 
 use macss_client::args::Args;
-use macss_protocol::{
-    packetize_frame, Codec, ControlMessage, PROTOCOL_VERSION,
-};
+use macss_client::session::SessionHooks;
+use macss_protocol::{packetize_frame, Codec, ControlMessage, InputEvent, PROTOCOL_VERSION};
 use macss_transport::{read_message, write_message, VideoSender};
 use tokio::net::TcpListener;
 
@@ -70,11 +69,89 @@ async fn client_receives_video_then_host_says_bye() {
         ..Default::default()
     };
 
-    let outcome = tokio::time::timeout(Duration::from_secs(10), macss_client::session::run_once(&args))
-        .await
-        .expect("session should finish before the timeout")
-        .expect("session should end cleanly");
+    let mut hooks = SessionHooks::default();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        macss_client::session::run_once(&args, &mut hooks),
+    )
+    .await
+    .expect("session should finish before the timeout")
+    .expect("session should end cleanly");
 
     assert_eq!(outcome, ());
     host.await.unwrap();
+}
+
+#[tokio::test]
+async fn client_forwards_input_events_to_the_host() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let host = tokio::spawn(async move {
+        let (stream, _peer) = listener.accept().await.unwrap();
+        let (mut rd, mut wr) = stream.into_split();
+
+        let _ = read_message(&mut rd).await.unwrap().unwrap();
+        write_message(
+            &mut wr,
+            &ControlMessage::HelloAck {
+                protocol: PROTOCOL_VERSION,
+                session_id: "input".into(),
+                host_name: "mock-mac".into(),
+                display_width: 1280,
+                display_height: 720,
+                scale: 1.0,
+                video_port: 0,
+                codecs: vec![Codec::H264],
+            },
+        )
+        .await
+        .unwrap();
+        let _ = read_message(&mut rd).await.unwrap().unwrap();
+
+        let mut saw_input = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(500), read_message(&mut rd)).await {
+                Ok(Ok(Some(ControlMessage::Input {
+                    event: InputEvent::MouseMove { x, y },
+                }))) if (x - 0.25).abs() < 1e-6 && (y - 0.75).abs() < 1e-6 => {
+                    saw_input = true;
+                    break;
+                }
+                Ok(Ok(Some(_))) => {}
+                _ => {}
+            }
+        }
+
+        let _ = write_message(&mut wr, &ControlMessage::Bye).await;
+        saw_input
+    });
+
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = sender.send(InputEvent::MouseMove { x: 0.25, y: 0.75 });
+    });
+
+    let args = Args {
+        host: addr.ip().to_string(),
+        control_port: addr.port(),
+        ..Default::default()
+    };
+    let mut hooks = SessionHooks {
+        frames: None,
+        input: Some(receiver),
+    };
+
+    let _ = tokio::time::timeout(
+        Duration::from_secs(10),
+        macss_client::session::run_once(&args, &mut hooks),
+    )
+    .await;
+
+    assert!(
+        host.await.unwrap(),
+        "the host should have received the injected mouse move"
+    );
 }

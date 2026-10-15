@@ -13,20 +13,20 @@ See [`docs/protocol.md`](docs/protocol.md) for the normative wire format.
 
 ## Status
 
-Early. The protocol, the Rust transport/decoder scaffolding, the network and
-session logic, and the Swift capture → encode → input pipeline are in place.
-The client does **not** render video yet, and the Swift host has not been
-compiled in this repository's development environment (Windows), so treat the
-Swift side as authored-but-unverified until built on a Mac.
+Early but runnable. The Rust client connects, receives video, renders it in a
+window, and forwards mouse/keyboard back to the host. The macOS host is authored
+against the real Apple frameworks but has not been compiled in this repository's
+development environment (Windows), so treat the Swift side as
+authored-but-unverified until built on a Mac. Real H.264 decoding needs the
+`ffmpeg` feature; until then use `--synthetic-video` to exercise rendering.
 
 | Area | State |
 |---|---|
 | Wire protocol + framing + reassembly | done, unit-tested |
 | Rust transport, backoff, Wake-on-LAN, args | done, unit-tested |
-| Client session (handshake, stream, stats, reconnect) | done, end-to-end tested against a mock host |
-| UDP video receive + reassembly in the client | done |
+| Client session (handshake, stream, stats, reconnect, input) | done, end-to-end tested against a mock host |
+| Client window + wgpu YUV renderer + input capture | done, launches and renders (Vulkan) |
 | FFmpeg decode backend | written, behind the `ffmpeg` feature, needs a machine with FFmpeg to verify |
-| Rendering / window / input capture (client) | **not started** |
 | macOS host: capture, encode, input injection, clipboard, menu bar | written, not compiled here |
 | macOS host: app bundle + Info.plist + build script | provided |
 
@@ -41,7 +41,8 @@ host-macos/                 Swift package for the macOS host
 client/                     Rust workspace
   crates/protocol/          wire types (no dependencies)
   crates/transport/         control framing, UDP video, backoff, WOL
-  crates/decoder/           decoder trait + null/FFmpeg backends
+  crates/decoder/           decoder trait + null/FFmpeg backends, synthetic frames
+  crates/viewer/            winit + wgpu window, YUV renderer, input translation
   crates/client/            client binary + library
   crates/mock-host/         fake host for development
 scripts/build-host-app.sh   build + bundle + ad-hoc sign the host
@@ -51,12 +52,14 @@ scripts/build-host-app.sh   build + bundle + ad-hoc sign the host
 
 ```sh
 cd client
-cargo test --workspace          # 24 tests
-cargo run -p macss-mock-host -- --seconds 30     # terminal 1
-cargo run -p macss-client -- 127.0.0.1           # terminal 2
+cargo test --workspace          # 39 tests
+cargo run -p macss-mock-host -- --seconds 60     # terminal 1
+cargo run -p macss-client -- 127.0.0.1 --synthetic-video   # terminal 2
 ```
 
-Real decoding requires FFmpeg; see [`client/README.md`](client/README.md).
+`--synthetic-video` renders a local test pattern so you can see the window and
+input path without installing FFmpeg. Real decoding requires FFmpeg; see
+[`client/README.md`](client/README.md).
 
 ## Building the host (on macOS)
 
@@ -88,7 +91,7 @@ signature to keep that stable.
 
 ```
 macOS host (Swift)                          client (Rust)
-  ScreenCaptureKit ─► VideoToolbox ─┐        ┌─ UDP video ─► reassembly ─► decoder ─► (render)
+  ScreenCaptureKit ─► VideoToolbox ─┐        ┌─ UDP video ─► reassembly ─► decoder ─► wgpu render
                                     ├── Wi-Fi ┤
   CGEvent inject ◄── input ◄────────┘        └─ TCP control ─► session, input, clipboard
   NSPasteboard  ◄──► clipboard                  Wake-on-LAN before connecting
@@ -103,9 +106,10 @@ macOS host (Swift)                          client (Rust)
 
 ## Roadmap
 
-1. **M0/M1 (current):** protocol, transport, host capture/encode, client receive + stats.
-2. **M2:** client window + GPU render (winit + wgpu), then input capture → host injection.
-3. **M3:** robustness — keyframe recovery, adaptive bitrate, sleep prevention, permission UX.
+1. **M0/M1:** protocol, transport, host capture/encode, client receive + stats. ✅
+2. **M2:** client window + GPU render (winit + wgpu) and input capture → host injection. ✅
+3. **M3 (next):** verify the Swift host on a Mac, wire up real FFmpeg decode, then
+   robustness — keyframe recovery, adaptive bitrate, sleep prevention, permission UX.
 4. **M4:** clipboard polish (the wire path exists), multi-display selection.
 5. **M5:** packaging (Windows installer, notarized macOS `.app`), end-to-end docs.
 

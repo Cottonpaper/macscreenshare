@@ -6,6 +6,8 @@
 
 use anyhow::Result;
 
+pub mod synthetic;
+
 /// Pixel layout of a decoded frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -30,6 +32,11 @@ pub struct DecodedFrame {
     pub format: PixelFormat,
     pub planes: Vec<Plane>,
     pub pts_ms: u32,
+}
+
+/// Receives decoded frames, typically implemented by the renderer.
+pub trait FrameSink: Send + Sync + 'static {
+    fn submit(&self, frame: DecodedFrame);
 }
 
 /// Decodes access units produced by the host.
@@ -150,10 +157,10 @@ pub mod ffmpeg_backend {
         fn convert(&mut self, frame: &VideoFrame, pts_ms: u32) -> Result<DecodedFrame> {
             let (w, h) = (frame.width(), frame.height());
             if frame.format() == Pixel::YUV420P {
-                return Ok(copy_planar(frame, PixelFormat::Yuv420p, w, h, pts_ms));
+                return Ok(copy_yuv420p(frame, pts_ms));
             }
             if frame.format() == Pixel::NV12 {
-                return Ok(copy_planar(frame, PixelFormat::Nv12, w, h, pts_ms));
+                return Ok(nv12_to_yuv420p(frame, pts_ms));
             }
 
             // Rebuild the scaler if the geometry or pixel format changed.
@@ -181,39 +188,80 @@ pub mod ffmpeg_backend {
                 .unwrap()
                 .run(frame, &mut out)
                 .context("scale frame")?;
-            Ok(copy_planar(&out, PixelFormat::Yuv420p, w, h, pts_ms))
+            Ok(copy_yuv420p(&out, pts_ms))
         }
     }
 
-    fn copy_planar(frame: &VideoFrame, fmt: PixelFormat, w: u32, h: u32, pts_ms: u32) -> DecodedFrame {
-        let n_planes = match fmt {
-            PixelFormat::Yuv420p => 3,
-            PixelFormat::Nv12 => 2,
-        };
-        let mut planes = Vec::with_capacity(n_planes);
-        for i in 0..n_planes {
-            let stride = frame.stride(i);
-            let rows = if i == 0 { h as usize } else { (h as usize).div_ceil(2) };
-            let data = frame.data(i);
-            // Copy tightly per row so downstream code need not honour stride.
-            let mut out = Vec::with_capacity(stride * rows);
-            for r in 0..rows {
-                let start = r * stride;
-                let end = (start + stride).min(data.len());
-                out.extend_from_slice(&data[start..end]);
-            }
-            planes.push(Plane {
-                data: out,
-                stride,
-            });
-        }
+    /// Extract the three planes of a planar YUV 4:2:0 frame.
+    fn copy_yuv420p(frame: &VideoFrame, pts_ms: u32) -> DecodedFrame {
         DecodedFrame {
-            width: w,
-            height: h,
-            format: fmt,
-            planes,
+            width: frame.width(),
+            height: frame.height(),
+            format: PixelFormat::Yuv420p,
+            planes: (0..3).map(|i| copy_plane(frame, i)).collect(),
             pts_ms,
         }
+    }
+
+    /// Split an NV12 frame into separate Y, U and V planes.
+    fn nv12_to_yuv420p(frame: &VideoFrame, pts_ms: u32) -> DecodedFrame {
+        let width = frame.width();
+        let height = frame.height();
+        let chroma_rows = (height as usize).div_ceil(2);
+        let chroma_cols = (width as usize).div_ceil(2);
+
+        let y = copy_plane(frame, 0);
+
+        let uv = frame.data(1);
+        let uv_stride = frame.stride(1);
+        let mut u = Vec::with_capacity(chroma_cols * chroma_rows);
+        let mut v = Vec::with_capacity(chroma_cols * chroma_rows);
+        for row in 0..chroma_rows {
+            let base = row * uv_stride;
+            for col in 0..chroma_cols {
+                let idx = base + col * 2;
+                if idx + 1 < uv.len() {
+                    u.push(uv[idx]);
+                    v.push(uv[idx + 1]);
+                } else {
+                    u.push(128);
+                    v.push(128);
+                }
+            }
+        }
+
+        DecodedFrame {
+            width,
+            height,
+            format: PixelFormat::Yuv420p,
+            planes: vec![
+                y,
+                Plane { data: u, stride: chroma_cols },
+                Plane { data: v, stride: chroma_cols },
+            ],
+            pts_ms,
+        }
+    }
+
+    fn copy_plane(frame: &VideoFrame, index: usize) -> Plane {
+        let stride = frame.stride(index);
+        let rows = if index == 0 {
+            frame.height() as usize
+        } else {
+            (frame.height() as usize).div_ceil(2)
+        };
+        let data = frame.data(index);
+        // Copy tightly per row so downstream code need not honour stride.
+        let mut out = Vec::with_capacity(stride.min(data.len().max(1)) * rows);
+        for row in 0..rows {
+            let start = row * stride;
+            let end = (start + stride).min(data.len());
+            if start >= end {
+                break;
+            }
+            out.extend_from_slice(&data[start..end]);
+        }
+        Plane { data: out, stride }
     }
 
     impl VideoDecoder for FfmpegDecoder {

@@ -18,6 +18,10 @@ pub struct Args {
     pub wol_port: u16,
     /// Log a summary line every N received frames (0 disables).
     pub log_every: u64,
+    /// Run without a window (no rendering, no input capture).
+    pub headless: bool,
+    /// Generate local test frames instead of relying on the decoder.
+    pub synthetic_video: bool,
 }
 
 impl Default for Args {
@@ -34,6 +38,8 @@ impl Default for Args {
             wol: None,
             wol_port: 9,
             log_every: 120,
+            headless: false,
+            synthetic_video: false,
         }
     }
 }
@@ -64,6 +70,8 @@ OPTIONS:
     --wol <MAC>            Send a magic packet before connecting (aa:bb:cc:dd:ee:ff)
     --wol-port <P>         Wake-on-LAN port           [default: 9]
     --log-every <N>        Log every N frames, 0 = off [default: 120]
+    --headless             No window; just connect and log
+    --synthetic-video      Generate local test frames (no decoder needed)
     -h, --help             Show this help
 ";
 
@@ -92,6 +100,8 @@ pub fn parse_from<I: IntoIterator<Item = String>>(iter: I) -> Result<Option<Args
             "--wol" => args.wol = Some(parse_mac(&next_val(&mut it, "--wol")?)?),
             "--wol-port" => args.wol_port = next_num(&mut it, "--wol-port")?,
             "--log-every" => args.log_every = next_num(&mut it, "--log-every")?,
+            "--headless" => args.headless = true,
+            "--synthetic-video" => args.synthetic_video = true,
             other if other.starts_with("--") => bail!("unknown option {other:?}"),
             other => positional.push(other.to_string()),
         }
