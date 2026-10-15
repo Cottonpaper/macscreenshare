@@ -5,6 +5,7 @@
 //! `client/README.md` for the required system libraries.
 
 use anyhow::Result;
+use macss_protocol::Codec;
 
 pub mod annexb;
 pub mod planes;
@@ -12,6 +13,9 @@ pub mod synthetic;
 
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub mod videotoolbox;
+
+#[cfg(all(feature = "mediafoundation", target_os = "windows"))]
+pub mod mediafoundation;
 
 /// Pixel layout of a decoded frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,21 +98,31 @@ impl VideoDecoder for NullDecoder {
     }
 }
 
-/// Build the decoder selected by build features.
-pub fn default_decoder() -> Result<Box<dyn VideoDecoder>> {
+/// Build the decoder selected by build features and the negotiated codec.
+#[allow(unused_variables)]
+pub fn default_decoder(codec: Codec) -> Result<Box<dyn VideoDecoder>> {
     #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
     {
         return Ok(Box::new(videotoolbox::VideoToolboxDecoder::new()?));
     }
-    #[cfg(all(
-        not(all(feature = "videotoolbox", target_os = "macos")),
-        feature = "ffmpeg"
-    ))]
+    #[cfg(all(feature = "mediafoundation", target_os = "windows"))]
     {
-        return Ok(Box::new(ffmpeg_backend::FfmpegDecoder::new_h264()?));
+        return Ok(Box::new(mediafoundation::MediaFoundationDecoder::new(codec)?));
     }
     #[cfg(all(
         not(all(feature = "videotoolbox", target_os = "macos")),
+        not(all(feature = "mediafoundation", target_os = "windows")),
+        feature = "ffmpeg"
+    ))]
+    {
+        return Ok(Box::new(match codec {
+            Codec::H264 => ffmpeg_backend::FfmpegDecoder::new_h264()?,
+            Codec::Hevc => ffmpeg_backend::FfmpegDecoder::new_hevc()?,
+        }));
+    }
+    #[cfg(all(
+        not(all(feature = "videotoolbox", target_os = "macos")),
+        not(all(feature = "mediafoundation", target_os = "windows")),
         not(feature = "ffmpeg")
     ))]
     {
@@ -125,8 +139,13 @@ pub fn backend_name() -> &'static str {
     {
         return "videotoolbox (hardware, NV12)";
     }
+    #[cfg(all(feature = "mediafoundation", target_os = "windows"))]
+    {
+        return "mediafoundation (NV12)";
+    }
     #[cfg(all(
         not(all(feature = "videotoolbox", target_os = "macos")),
+        not(all(feature = "mediafoundation", target_os = "windows")),
         feature = "ffmpeg"
     ))]
     {
@@ -134,6 +153,7 @@ pub fn backend_name() -> &'static str {
     }
     #[cfg(all(
         not(all(feature = "videotoolbox", target_os = "macos")),
+        not(all(feature = "mediafoundation", target_os = "windows")),
         not(feature = "ffmpeg")
     ))]
     {
@@ -289,7 +309,14 @@ mod tests {
 
     #[test]
     fn default_decoder_builds() {
-        // Without the ffmpeg feature this yields a NullDecoder.
-        assert!(default_decoder().is_ok());
+        // On Windows this constructs the Media Foundation MFT; elsewhere it is a
+        // Null or native decoder. Either way it should not error.
+        assert!(default_decoder(Codec::H264).is_ok());
+    }
+
+    #[cfg(all(feature = "mediafoundation", target_os = "windows"))]
+    #[test]
+    fn windows_backend_is_mediafoundation() {
+        assert_eq!(backend_name(), "mediafoundation (NV12)");
     }
 }

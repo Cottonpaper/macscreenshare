@@ -6,10 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-# On macOS this selects the native VideoToolbox decoder by default; on every
-# other target the `videotoolbox` module is cfg'd out and the feature is inert.
-# Opt out with --no-default-features.
-default = ["videotoolbox"]
+# On macOS this selects the native VideoToolbox decoder by default; on Windows
+# it selects the native Media Foundation decoder. Each module is cfg'd out on
+# the wrong target, so the feature is inert there. Opt out with
+# --no-default-features.
+default = ["videotoolbox", "mediafoundation"]
 # Native hardware decode via the system VideoToolbox framework (macOS only).
 videotoolbox = [
     "dep:block2",
@@ -18,6 +19,8 @@ videotoolbox = [
     "dep:objc2-core-video",
     "dep:objc2-video-toolbox",
 ]
+# Native decode via Media Foundation decoder MFTs (Windows only). No FFmpeg.
+mediafoundation = ["dep:windows"]
 # Enables the FFmpeg-backed decoder. Requires FFmpeg dev libraries at build
 # time (vcpkg on Windows). See client/README.md.
 ffmpeg = ["dep:ffmpeg-next"]
@@ -35,3 +38,13 @@ objc2-core-foundation = { version = "0.3", optional = true, default-features = f
 objc2-core-media = { version = "0.3", optional = true, default-features = false, features = ["alloc", "CMBase", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer", "CMTime", "objc2"] }
 objc2-core-video = { version = "0.3", optional = true, default-features = false, features = ["CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn", "objc2"] }
 objc2-video-toolbox = { version = "0.3", optional = true, default-features = false, features = ["VTBase", "VTErrors", "VTDecompressionSession", "VTDecompressionProperties", "VTSession", "block2", "objc2", "objc2-core-media", "objc2-core-video"] }
+
+# Media Foundation decode dependencies. Windows-only, so other targets never
+# compile them.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", optional = true, default-features = false, features = [
+    "std",
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+] }

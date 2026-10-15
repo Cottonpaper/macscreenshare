@@ -172,7 +172,7 @@ async fn handshake_and_stream(
         args.bitrate_kbps
     );
 
-    let mut decoder = default_decoder().context("create decoder")?;
+    let mut decoder = default_decoder(codec).context("create decoder")?;
     tracing::info!("decoder: {}", backend_name());
 
     // Optional synthetic frames let the render path be exercised with no decoder.
@@ -270,6 +270,7 @@ async fn receive_loop(
     let mut frames: u64 = 0;
     let mut bytes: u64 = 0;
     let mut decoded: u64 = 0;
+    let mut decode_errors: u64 = 0;
     let mut last_frame_id: Option<u32> = None;
     let mut keyframe_requests: u64 = 0;
     let mut window_start = Instant::now();
@@ -329,8 +330,22 @@ async fn receive_loop(
 
                     frames += 1;
                     bytes += frame.data.len() as u64;
+                    // A corrupt or undecodable frame must not end the session;
+                    // log it, ask for a fresh keyframe and carry on.
                     let decoded_frames =
-                        decoder.decode(&frame.data, frame.keyframe, frame.timestamp_ms)?;
+                        match decoder.decode(&frame.data, frame.keyframe, frame.timestamp_ms) {
+                            Ok(decoded_batch) => decoded_batch,
+                            Err(error) => {
+                                decode_errors += 1;
+                                if decode_errors <= 3 || decode_errors % 120 == 0 {
+                                    tracing::warn!(
+                                        "decode error #{decode_errors}: {error:#} (requesting keyframe)"
+                                    );
+                                }
+                                let _ = tx.send(ControlMessage::RequestKeyframe).await;
+                                Vec::new()
+                            }
+                        };
                     decoded += decoded_frames.len() as u64;
                     if submit_decoded {
                         if let Some(sink) = hooks.frames.as_ref() {
@@ -344,7 +359,7 @@ async fn receive_loop(
                         let secs = window_start.elapsed().as_secs_f64().max(1e-6);
                         let mbps = (bytes as f64 * 8.0) / secs / 1_000_000.0;
                         tracing::info!(
-                            "{frames} frames, {:.1} fps, {mbps:.1} Mbit/s, {} decoded, {} keyframe requests, {} dropped",
+                            "{frames} frames, {:.1} fps, {mbps:.1} Mbit/s, {} decoded, {decode_errors} decode errors, {} keyframe requests, {} dropped",
                             frames as f64 / secs,
                             decoded,
                             keyframe_requests,

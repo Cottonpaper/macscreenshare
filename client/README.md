@@ -79,8 +79,9 @@ fixed. Use `--no-adaptive-bitrate` to pin it regardless.
 | Platform | Backend | How |
 |---|---|---|
 | macOS | VideoToolbox | default; hardware H.264/HEVC decode, no extra packages |
-| Windows | FFmpeg | opt in with `--features macss-decoder/ffmpeg` |
-| any | null | counts packets only (the non-macOS default) |
+| Windows | Media Foundation | default; native H.264 decode (HEVC needs the OS "HEVC Video Extensions") |
+| Windows | FFmpeg | alternative; needs `macss-decoder` built without defaults, plus FFmpeg libs |
+| any | null | counts packets only (when built without a decoder feature) |
 
 On macOS the `videotoolbox` feature is enabled by default, so a plain
 `cargo run -p macss-client -- <host>` decodes natively. You can select it
@@ -90,13 +91,17 @@ explicitly (it is inert on non-Apple targets):
 cargo build -p macss-client --features macss-decoder/videotoolbox
 ```
 
-For the FFmpeg path (e.g. on Windows):
+On Windows the `mediafoundation` feature is enabled by default and uses the
+system decoder MFTs — no FFmpeg, no extra packages:
 
 ```sh
-cargo build -p macss-client --features macss-decoder/ffmpeg
+cargo run -p macss-client -- <host>          # Media Foundation decode
 ```
 
-which needs FFmpeg development libraries at build time:
+The FFmpeg path is still available as an alternative, but on Windows it requires
+building `macss-decoder` without its default `mediafoundation` feature (a Cargo
+feature-selection limitation, not a code issue). When built that way it needs
+FFmpeg development libraries at build time:
 
 - **Windows:** install via [vcpkg](https://vcpkg.io) — `vcpkg install ffmpeg:x64-windows`
   and set `VCPKG_ROOT`. `ffmpeg-next`'s `build` feature picks it up.
@@ -108,10 +113,14 @@ renderer are untouched. The VideoToolbox backend is specified in
 
 ## Verified in this environment
 
-- `cargo test --workspace`: 55 tests — protocol framing and reassembly, control
+- `cargo test --workspace`: 67 tests — protocol framing and reassembly, control
   round-trips, UDP send/receive, backoff, arg parsing, HID key mapping, scroll
-  direction, letterbox coordinate math, Annex-B/plane helpers, and codec
-  detection.
+  direction, letterbox coordinate math, Annex-B/plane helpers, codec detection,
+  adaptive-bitrate control, and pointer-delta math.
+- Windows: `mediafoundation::tests::encodes_then_decodes_a_frame` encodes real
+  H.264 with the OS encoder MFT and decodes it with the Media Foundation decoder,
+  asserting a `320x240` frame comes back — a self-contained check of the native
+  decode path with no FFmpeg.
 - `tests/end_to_end.rs`: a mock host streams frames and the client completes on
   `bye`; a second test injects a `MouseMove` and asserts the host receives it.
 - Windowed client launches a wgpu surface (Vulkan on Windows, Metal on macOS),
