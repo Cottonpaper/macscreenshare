@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol",
+    "crates/transport",
+    "crates/decoder",
+    "crates/client",
+    "crates/mock-host",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
+
+[workspace.dependencies]
+macss-protocol = { path = "crates/protocol" }
+macss-transport = { path = "crates/transport" }
+macss-decoder = { path = "crates/decoder" }
+
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal"] }

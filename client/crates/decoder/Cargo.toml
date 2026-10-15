@@ -1,0 +1,18 @@
+[package]
+name = "macss-decoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Enables the FFmpeg-backed decoder. Requires FFmpeg dev libraries at build
+# time (vcpkg on Windows). See client/README.md.
+ffmpeg = ["dep:ffmpeg-next"]
+
+[dependencies]
+macss-protocol.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+ffmpeg-next = { version = "7", optional = true, default-features = false, features = ["build", "codec", "software-resampling", "software-scaling"] }

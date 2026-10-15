@@ -1,0 +1,19 @@
+# Rust
+/client/target/
+**/*.rs.bk
+
+# Swift / Xcode
+/host-macos/.build/
+/host-macos/DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
+# Build outputs
+/dist/
+
+# macOS
+.DS_Store
+
+# Logs and scratch
+*.log

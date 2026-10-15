@@ -1,0 +1,24 @@
+[package]
+name = "macss-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "macss_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "macss-client"
+path = "src/main.rs"
+
+[dependencies]
+macss-protocol.workspace = true
+macss-transport.workspace = true
+macss-decoder.workspace = true
+
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

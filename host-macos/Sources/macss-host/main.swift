@@ -1,0 +1,226 @@
+import AppKit
+import Darwin
+import Foundation
+
+// MARK: - Arguments
+
+struct Arguments {
+    var settings = Settings()
+    var verbose = false
+    var showHelp = false
+
+    static let usage = """
+    macss-host — share this Mac's screen with a macscreenshare client
+
+    USAGE:
+        macss-host [OPTIONS]
+
+    OPTIONS:
+        --token <T>      Require clients to present this shared secret
+        --port <P>       TCP control port                 [default: 47810]
+        --fps <N>        Default frame rate               [default: 60]
+        --bitrate <K>    Default max bitrate in kbit/s    [default: 20000]
+        --no-cursor      Do not capture the mouse cursor
+        --verbose        Verbose logging
+        -h, --help       Show this help
+    """
+
+    static func parse(_ argv: [String]) -> Arguments {
+        var result = Arguments()
+        let args = Array(argv)
+        var i = 0
+        while i < args.count {
+            switch args[i] {
+            case "--token":
+                if i + 1 < args.count { result.settings.token = args[i + 1]; i += 1 }
+            case "--port":
+                if i + 1 < args.count, let value = UInt16(args[i + 1]) {
+                    result.settings.controlPort = value
+                }
+                i += 1
+            case "--fps":
+                if i + 1 < args.count, let value = Int(args[i + 1]) {
+                    result.settings.fps = min(max(value, 1), 120)
+                }
+                i += 1
+            case "--bitrate":
+                if i + 1 < args.count, let value = Int(args[i + 1]) {
+                    result.settings.bitrateKbps = max(value, 500)
+                }
+                i += 1
+            case "--no-cursor":
+                result.settings.captureCursor = false
+            case "--verbose":
+                result.verbose = true
+            case "-h", "--help":
+                result.showHelp = true
+            default:
+                Log.warn("ignoring unknown argument \(args[i])")
+            }
+            i += 1
+        }
+        return result
+    }
+}
+
+// MARK: - App delegate
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: NSStatusItem?
+    private var server: HostServer?
+    private var settings = Settings()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let arguments = Arguments.parse(Array(CommandLine.arguments.dropFirst()))
+        if arguments.showHelp {
+            print(Arguments.usage)
+            NSApp.terminate(nil)
+            return
+        }
+
+        settings = arguments.settings
+        Log.verbose = arguments.verbose
+
+        configureStatusItem()
+        checkPermissions()
+        startServer()
+    }
+
+    // MARK: Menu bar
+
+    private func configureStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "🖥️"
+        item.button?.toolTip = "MacScreenShare"
+        statusItem = item
+        rebuildMenu()
+    }
+
+    private func rebuildMenu() {
+        let menu = NSMenu()
+        let address = localIPv4Address() ?? "your-mac.local"
+        let state = server != nil ? "listening on \(address):\(settings.controlPort)" : "stopped"
+        _ = menu.addItem(withTitle: state, action: nil, keyEquivalent: "")
+        menu.addItem(.separator())
+
+        if server == nil {
+            _ = menu.addItem(withTitle: "Start server", action: #selector(startServerAction), keyEquivalent: "")
+        } else {
+            _ = menu.addItem(withTitle: "Stop server", action: #selector(stopServerAction), keyEquivalent: "")
+        }
+
+        menu.addItem(.separator())
+        _ = menu.addItem(withTitle: "Grant Screen Recording…",
+                         action: #selector(openScreenRecording), keyEquivalent: "")
+        _ = menu.addItem(withTitle: "Grant Accessibility…",
+                         action: #selector(openAccessibility), keyEquivalent: "")
+        _ = menu.addItem(withTitle: "Copy host address",
+                         action: #selector(copyAddress), keyEquivalent: "")
+        menu.addItem(.separator())
+        _ = menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
+
+        for item in menu.items where item.action != nil {
+            item.target = self
+        }
+        statusItem?.menu = menu
+    }
+
+    @objc private func startServerAction() { startServer() }
+    @objc private func stopServerAction() { stopServer(); rebuildMenu() }
+
+    @objc private func openScreenRecording() {
+        Permissions.requestScreenRecording()
+        Permissions.openSettings(.screenRecording)
+    }
+
+    @objc private func openAccessibility() {
+        Permissions.requestAccessibility()
+        Permissions.openSettings(.accessibility)
+    }
+
+    @objc private func copyAddress() {
+        let address = "\(localIPv4Address() ?? "127.0.0.1"):\(settings.controlPort)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(address, forType: .string)
+    }
+
+    @objc private func quit() {
+        stopServer()
+        NSApp.terminate(nil)
+    }
+
+    // MARK: Server lifecycle
+
+    private func startServer() {
+        guard server == nil else { return }
+        let server = HostServer(settings: settings)
+        do {
+            try server.start()
+            self.server = server
+            let address = localIPv4Address() ?? "127.0.0.1"
+            Log.info("ready — point the client at \(address):\(settings.controlPort)")
+            if let token = settings.token {
+                Log.info("a shared token is required")
+            } else {
+                Log.warn("no --token set; any LAN client may connect")
+            }
+        } catch {
+            Log.warn("could not start: \(error)")
+        }
+        rebuildMenu()
+    }
+
+    private func stopServer() {
+        server?.stop()
+        server = nil
+        rebuildMenu()
+    }
+
+    private func checkPermissions() {
+        if !Permissions.hasScreenRecording {
+            Log.warn("Screen Recording permission is missing; the menu can open the settings pane")
+            _ = Permissions.requestScreenRecording()
+        }
+        if !Permissions.hasAccessibility {
+            Log.warn("Accessibility permission is missing; keyboard/mouse control will not work")
+            Permissions.requestAccessibility()
+        }
+    }
+
+    // MARK: Helpers
+
+    private func localIPv4Address() -> String? {
+        var result: String?
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+
+        var pointer = first
+        while true {
+            let interface = pointer.pointee
+            if let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
+                let name = String(cString: interface.ifa_name)
+                if name == "en0" || name == "en1" {
+                    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(addr, socklen_t(addr.pointee.sa_len),
+                                   &host, socklen_t(host.count),
+                                   nil, 0, NI_NUMERICHOST) == 0 {
+                        result = String(cString: host)
+                        break
+                    }
+                }
+            }
+            guard let next = interface.ifa_next else { break }
+            pointer = next
+        }
+        return result
+    }
+}
+
+// MARK: - Entry point
+
+let application = NSApplication.shared
+let delegate = AppDelegate()
+application.delegate = delegate
+_ = application.setActivationPolicy(.accessory)
+application.run()
