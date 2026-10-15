@@ -29,11 +29,10 @@ Options: `--token <T>`, `--port <P>`, `--fps <N>`, `--bitrate <K>`,
 `--no-cursor`, `--idle-refresh <N>`, `--verbose`.
 
 `--idle-refresh` sets how often a *static* screen is still refreshed (default
-10 fps). ScreenCaptureKit marks frames `idle` when nothing changed; the host
-forwards those at this rate so the client keeps converging on the current screen
-(cursor, caret, and updates ScreenCaptureKit doesn't flag) instead of freezing on
-the last frame. `--idle-refresh 0` restores the old "only send on change"
-behaviour.
+10 fps). ScreenCaptureKit stops delivering frames when nothing changes, so the
+host captures a fresh frame on demand at this rate — keeping the client
+converged on the current screen (most importantly the settled cursor) instead of
+freezing on a stale frame. `--idle-refresh 0` disables the on-demand refresh.
 
 ## Permissions
 

@@ -28,12 +28,27 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream!
     private let sampleQueue: DispatchQueue
     private let frameStatusKey = SCStreamFrameInfo.status
-    /// Minimum seconds between forwarded "idle" frames, or `nil` to drop them.
+    /// Minimum seconds between forwarded idle frames, or `nil` to disable the
+    /// idle refresh entirely.
     private let idleInterval: CFTimeInterval?
+    /// Retained so an idle frame can be captured on demand. ScreenCaptureKit's
+    /// stream goes silent when nothing changes, so we pull a fresh frame (which
+    /// includes the settled cursor) ourselves.
+    private let filter: SCContentFilter
+    private let configuration: SCStreamConfiguration
+    private var idleTimer: DispatchSourceTimer?
     private var lastForwarded: CFTimeInterval = 0
 
-    private init(info: DisplayInfo, queue: DispatchQueue, idleInterval: CFTimeInterval?) {
+    private init(
+        info: DisplayInfo,
+        filter: SCContentFilter,
+        configuration: SCStreamConfiguration,
+        queue: DispatchQueue,
+        idleInterval: CFTimeInterval?
+    ) {
         self.info = info
+        self.filter = filter
+        self.configuration = configuration
         self.sampleQueue = queue
         self.idleInterval = idleInterval
     }
@@ -82,7 +97,10 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         let queue = DispatchQueue(label: "macss.capture", qos: .userInitiated)
         let idleInterval: CFTimeInterval? =
             idleRefreshFPS > 0 ? 1.0 / Double(idleRefreshFPS) : nil
-        let engine = CaptureEngine(info: info, queue: queue, idleInterval: idleInterval)
+        let engine = CaptureEngine(
+            info: info, filter: filter, configuration: config,
+            queue: queue, idleInterval: idleInterval)
+        Log.info("capture: \(display.width)x\(display.height), idle refresh \(idleRefreshFPS) fps")
         let stream = SCStream(filter: filter, configuration: config, delegate: engine)
         engine.stream = stream
         try stream.addStreamOutput(engine, type: .screen, sampleHandlerQueue: queue)
@@ -91,10 +109,52 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func start() async throws {
         try await stream.startCapture()
+        startIdleTimer()
     }
 
     func stop() async {
+        idleTimer?.cancel()
+        idleTimer = nil
         try? await stream.stopCapture()
+    }
+
+    /// ScreenCaptureKit stops delivering frames while the screen is static, so
+    /// the client freezes on a stale frame (whose cursor lags behind the real
+    /// one). When the stream has been quiet for `idleInterval`, pull a fresh
+    /// frame ourselves — which includes the settled cursor — and forward it.
+    private func startIdleTimer() {
+        guard let idleInterval, idleInterval > 0 else { return }
+        let timer = DispatchSource.makeTimerSource(queue: sampleQueue)
+        timer.schedule(deadline: .now() + idleInterval, repeating: idleInterval)
+        timer.setEventHandler { [weak self] in
+            guard let self, let interval = self.idleInterval else { return }
+            guard CFAbsoluteTimeGetCurrent() - self.lastForwarded >= interval else { return }
+            self.captureIdleFrame()
+        }
+        timer.resume()
+        idleTimer = timer
+    }
+
+    private func captureIdleFrame() {
+        guard #available(macOS 14.0, *) else { return }
+        // Claim the slot up front so the timer doesn't stack captures while one
+        // is still in flight.
+        lastForwarded = CFAbsoluteTimeGetCurrent()
+        SCScreenshotManager.captureSampleBuffer(
+            contentFilter: filter, configuration: configuration
+        ) { [weak self] sampleBuffer, error in
+            guard let self else { return }
+            self.sampleQueue.async {
+                if let error {
+                    Log.debug("idle frame capture failed: \(error)")
+                    return
+                }
+                guard let sampleBuffer,
+                      let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                self.delegate?.captureEngine(self, didOutput: pixelBuffer, pts: pts)
+            }
+        }
     }
 
     /// Ask for a fresh keyframe. ScreenCaptureKit only emits IDRs on demand when
